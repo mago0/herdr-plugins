@@ -5,6 +5,7 @@ Usage: render.py WIDTH STATUS_MD [PREVIOUS_MD] [--max-rows N] [--count]
 """
 import argparse
 import re
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from rich.console import Console
@@ -65,9 +66,37 @@ def render_block(console, text):
     return lines
 
 
-def key(section, text):
-    # Markup and spacing differences don't count as a change; a move to another section does.
-    return section.lower() + "|" + re.sub(r"[\W_]+", " ", text).lower().strip()
+# Two blocks with at least this share of words in common, in order, count as the same item.
+SIMILAR = 0.8
+# Words that carry state; a change in any of them is a real change however similar the rest is.
+STATE_WORDS = {
+    "approved", "merged", "closed", "open", "opened", "reopened", "failed", "failing", "passed",
+    "passing", "blocked", "unblocked", "done", "deployed", "reverted", "running", "queued",
+    "waiting", "ready", "pending", "cancelled", "canceled", "green", "red", "not", "no",
+}
+
+
+def words(text):
+    return re.sub(r"[\W_]+", " ", text).lower().split()
+
+
+def facts(ws):
+    """Numbers, ids (repo#42 -> 42, SHAs) and state words, which must match exactly."""
+    return sorted(w for w in ws if w in STATE_WORDS or any(c.isdigit() for c in w))
+
+
+def same(a, b):
+    if a == b:
+        return True
+    if facts(a) != facts(b):
+        return False
+    return SequenceMatcher(None, a, b, autojunk=False).ratio() >= SIMILAR
+
+
+def matched(block, others, any_section=False):
+    """True when some block in others is the same item: same section (unless any_section) and similar words."""
+    section, ws = block
+    return any((any_section or s == section) and same(ws, ows) for s, ows in others)
 
 
 # Sections the viewer hides first, oldest items first, when the status doesn't fit.
@@ -87,23 +116,26 @@ def main():
     prev_path = Path(args.previous) if args.previous else None
     previous = blocks(prev_path.read_text()) if prev_path and prev_path.is_file() else None
 
-    prev_keys = {key(s, t) for s, k, t in previous or [] if k != "heading"}
-    # The counts cover list items; the summary sentence changes on most refreshes.
-    prev_items = {key(s, t) for s, k, t in previous or [] if k == "item"}
-    cur_items = {key(s, t) for s, k, t in current if k == "item"}
+    def comparable(bs, kinds):
+        return [(s.lower(), words(t)) for s, k, t in bs or [] if k in kinds]
+
+    prev_blocks = comparable(previous, ("item", "para"))
+    # The counts cover list items; the Last paragraph changes on most refreshes.
+    prev_items = comparable(previous, ("item",))
+    cur_items = comparable(current, ("item",))
 
     head = []
     if previous is not None:
-        changed = len(cur_items - prev_items)
+        changed = sum(not matched(b, prev_items) for b in cur_items)
         # A move to another section shows as a change, not a removal.
-        removed = len({k.split("|", 1)[1] for k in prev_items} - {k.split("|", 1)[1] for k in cur_items})
+        removed = sum(not matched(b, cur_items, any_section=True) for b in prev_items)
         if changed or removed:
             head = [f"{DIM_YELLOW}▌ {changed} new or changed · {removed} removed since last refresh{RESET}", ""]
 
     inner = Console(width=args.width - 2, force_terminal=True, highlight=False)
     units = []
     for i, (section, kind, text) in enumerate(current):
-        is_new = previous is not None and kind != "heading" and key(section, text) not in prev_keys
+        is_new = previous is not None and kind != "heading" and not matched((section.lower(), words(text)), prev_blocks)
         mark = MARK if is_new else " "
         lines = [f"{mark} {line}" for line in render_block(inner, text)]
         if kind == "heading" and i:

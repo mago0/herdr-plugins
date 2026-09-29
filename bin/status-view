@@ -27,10 +27,14 @@ ago() {
 
 offset=0
 body_lines=0
+show_all=0
 
 # Python rich renders the markdown and marks changed items; bat only highlights the source.
 if python3 -c 'import rich' 2>/dev/null; then
-  render() { python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md"; }
+  render() {
+    if [ "$show_all" = 1 ]; then python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md"
+    else python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md" --max-rows "$3"; fi
+  }
 else
   render() { fold -s -w "$1" "$2" | bat -l md --style=plain --color=always --paging=never --wrap=never; }
 fi
@@ -61,24 +65,29 @@ draw() {
     *) state=$'\e[32m✓ idle\e[0m' ;;
   esac
 
+  avail=$((rows - 3))
+  # status-refresh reads this to give the fork its line budget.
+  printf '%s %s\n' "$cols" "$avail" > "$dir/size"
+  if [ -n "$err" ] && [ "$err_at" -ge "$updated" ]; then
+    err="$(printf '%s' "${err:0:$((cols * 2))}" | fold -w "$cols")"
+    avail=$((avail - $(printf '%s\n' "$err" | wc -l)))
+  else
+    err=""
+  fi
+  [ "$avail" -lt 1 ] && avail=1
+
   body="$(if [ -s "$dir/status.md" ]; then
-    render "$cols" "$dir/status.md"
+    render "$cols" "$dir/status.md" "$avail"
   else
     echo "Waiting for the first status. It arrives when the next turn ends, or press r."
   fi)"
   body_lines="$(printf '%s\n' "$body" | wc -l)"
 
-  avail=$((rows - 3))
   printf '\e[H\e[2J'
-  printf '\e[1mstatus\e[0m · %s  %s  \e[2mr refresh · j/k scroll · q close\e[0m\n' "$target" "$state"
+  printf '\e[1mstatus\e[0m · %s  %s  \e[2mr refresh · a all · q close\e[0m\n' "$target" "$state"
   printf '\e[2m%s\e[0m\n' "$line2"
-  if [ -n "$err" ] && [ "$err_at" -ge "$updated" ]; then
-    err="$(printf '%s' "${err:0:$((cols * 2))}" | fold -w "$cols")"
-    printf '\e[31m%s\e[0m\n' "$err"
-    avail=$((avail - $(printf '%s\n' "$err" | wc -l)))
-  fi
+  [ -n "$err" ] && printf '\e[31m%s\e[0m\n' "$err"
   printf '\e[2m%s\e[0m\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
-  [ "$avail" -lt 1 ] && avail=1
   printf '%s\n' "$body" | tail -n +"$((offset + 1))" | head -n "$avail"
 }
 
@@ -104,5 +113,6 @@ while :; do
     j) [ "$offset" -lt "$((body_lines - 1))" ] && offset=$((offset + 1)); last_sig="" ;;
     k) [ "$offset" -gt 0 ] && offset=$((offset - 1)); last_sig="" ;;
     g) offset=0; last_sig="" ;;
+    a) show_all=$((1 - show_all)); offset=0; last_sig="" ;;
   esac
 done

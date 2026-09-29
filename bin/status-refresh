@@ -37,6 +37,36 @@ fail() {
     && mv "$dir/meta.json.tmp" "$dir/meta.json"
 }
 
+# Lines the fork may use: the viewer's body rows minus the changed-items line and its blank.
+read_size() {
+  cols="" rows=""
+  read -r cols rows < "$dir/size" 2>/dev/null || return 1
+  [ -n "$cols" ] && [ -n "$rows" ] && rows=$((rows - 2))
+}
+
+budget_prompt() {
+  local cols rows last
+  read_size || return 0
+  prompt="$prompt
+
+$(sed -e "s/{{cols}}/$cols/g" -e "s/{{rows}}/$rows/g" -e "s/{{wrap}}/$((cols - 5))/g" "$here/../length.md")"
+  last="$(jq -r 'select(.lines and .budget and .lines > .budget) | "\(.lines) \(.budget)"' "$dir/meta.json" 2>/dev/null)"
+  if [ -n "$last" ]; then
+    set -- $last
+    prompt="$prompt
+Your last status needed $1 lines and the pane showed $2. Cut at least $(($1 - $2)) lines this time."
+  fi
+}
+
+# Rendered length of the new status, stored in meta.json so the next prompt can correct an overflow.
+measure() {
+  local cols rows lines
+  read_size || return 0
+  lines="$(python3 "$here/render.py" "$cols" "$dir/status.md" --count 2>/dev/null)" || return 0
+  jq --argjson l "$lines" --argjson b "$rows" '. + {lines: $l, budget: $b}' "$dir/meta.json" > "$dir/meta.json.tmp" \
+    && mv "$dir/meta.json.tmp" "$dir/meta.json"
+}
+
 run_fork() {
   local info agent sid tx cwd rc result text dur usage prompt prev v
   local unset_args=()
@@ -54,6 +84,7 @@ run_fork() {
   [ -d "$cwd" ] || { fail "session cwd '$cwd' not found"; return; }
 
   prompt="$(cat "$PROMPT_FILE")"
+  budget_prompt
   if [ -s "$dir/status.md" ]; then
     prompt="$prompt
 
@@ -92,6 +123,7 @@ $(cat "$dir/status.md")
     > "$dir/meta.json.tmp" && mv "$dir/meta.json.tmp" "$dir/meta.json"
   jq -r --arg ts "$(date -Is)" --arg p "$pane" --arg s "$sid" --argjson d "$dur" \
     '[$ts, $p, $s, .input, .cached, .output, $d] | @tsv' <<<"$usage" >> "$STATE_ROOT/usage.tsv"
+  measure
 }
 
 while [ -e "$dir/pending" ]; do

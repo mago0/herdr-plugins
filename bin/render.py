@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Renders status markdown with rich, marking blocks that changed since the previous status.
 
-Usage: render.py WIDTH STATUS_MD [PREVIOUS_MD]
+Usage: render.py WIDTH STATUS_MD [PREVIOUS_MD] [--max-rows N] [--count]
 """
+import argparse
 import re
-import sys
 from pathlib import Path
 
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.text import Text
 
 HEADING = re.compile(r"^#{1,6}\s")
 ITEM = re.compile(r"^(?:[-*+]|\d+[.)])\s")
@@ -44,6 +43,9 @@ def blocks(md):
 
 
 MARK = "\x1b[1;33m▌\x1b[0m"
+DIM = "\x1b[2m"
+DIM_YELLOW = "\x1b[2;33m"
+RESET = "\x1b[0m"
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
@@ -64,10 +66,21 @@ def key(section, text):
     return section.lower() + "|" + re.sub(r"[\W_]+", " ", text).lower().strip()
 
 
+# Sections the viewer hides first, oldest items first, when the status doesn't fit.
+TRIM_ORDER = ("done", "next")
+
+
 def main():
-    width = int(sys.argv[1])
-    current = blocks(Path(sys.argv[2]).read_text())
-    prev_path = Path(sys.argv[3]) if len(sys.argv) > 3 else None
+    ap = argparse.ArgumentParser()
+    ap.add_argument("width", type=int)
+    ap.add_argument("status")
+    ap.add_argument("previous", nargs="?")
+    ap.add_argument("--max-rows", type=int, help="hide low-priority items beyond this many lines")
+    ap.add_argument("--count", action="store_true", help="print the untrimmed line count and exit")
+    args = ap.parse_args()
+
+    current = blocks(Path(args.status).read_text())
+    prev_path = Path(args.previous) if args.previous else None
     previous = blocks(prev_path.read_text()) if prev_path and prev_path.is_file() else None
 
     prev_keys = {key(s, t) for s, k, t in previous or [] if k != "heading"}
@@ -75,24 +88,49 @@ def main():
     prev_items = {key(s, t) for s, k, t in previous or [] if k == "item"}
     cur_items = {key(s, t) for s, k, t in current if k == "item"}
 
-    console = Console(width=width, force_terminal=True, highlight=False)
+    head = []
     if previous is not None:
         changed = len(cur_items - prev_items)
         # A move to another section shows as a change, not a removal.
         removed = len({k.split("|", 1)[1] for k in prev_items} - {k.split("|", 1)[1] for k in cur_items})
         if changed or removed:
-            console.print(Text(f"▌ {changed} new or changed · {removed} removed since last refresh", style="dim yellow"))
-            console.print()
+            head = [f"{DIM_YELLOW}▌ {changed} new or changed · {removed} removed since last refresh{RESET}", ""]
 
-    inner = Console(width=width - 2, force_terminal=True, highlight=False)
+    inner = Console(width=args.width - 2, force_terminal=True, highlight=False)
+    units = []
     for i, (section, kind, text) in enumerate(current):
-        if kind == "heading" and i:
-            print()
         is_new = previous is not None and kind != "heading" and key(section, text) not in prev_keys
         mark = MARK if is_new else " "
-        for line in render_block(inner, text):
-            print(f"{mark} {line}")
+        lines = [f"{mark} {line}" for line in render_block(inner, text)]
+        if kind == "heading" and i:
+            lines.insert(0, "")
+        units.append({"section": section.lower(), "kind": kind, "lines": lines})
 
+    total = len(head) + sum(len(u["lines"]) for u in units)
+    if args.count:
+        print(total)
+        return
+
+    hidden = 0
+    if args.max_rows and total > args.max_rows:
+        budget = args.max_rows - 1  # room for the hidden-items line
+        for section in TRIM_ORDER:
+            items = [u for u in units if u["section"] == section and u["kind"] == "item"]
+            for u in reversed(items):
+                if total <= budget:
+                    break
+                units.remove(u)
+                total -= len(u["lines"])
+                hidden += 1
+            if items and not any(u["section"] == section and u["kind"] == "item" for u in units):
+                for u in [u for u in units if u["section"] == section]:
+                    units.remove(u)
+                    total -= len(u["lines"])
+
+    for line in head + [line for u in units for line in u["lines"]]:
+        print(line)
+    if hidden:
+        print(f"{DIM}  … {hidden} older items hidden · a shows all{RESET}")
 
 if __name__ == "__main__":
     main()

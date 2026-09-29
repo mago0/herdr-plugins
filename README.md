@@ -3,15 +3,16 @@
 A [herdr](https://herdr.dev) pane beside a Claude Code session that shows a live answer to "current status?", refreshed each time a turn ends.
 
 ```
-status · w3:p9  ✓ idle
-updated 40s ago · 15s · 116k in (97% cached) · 1k out · total 480k
-------------------------------------------------------------------
+Migrate api to the new cluster and cut over DNS  ✓ idle
+updated 40s ago · 15s · 116k in (97% cached) · 1k out · total 480k · r a q
+--------------------------------------------------------------------------
 ▌ 1 new or changed · 0 removed since last refresh
-
-The migration PR is approved and the load test is still running.
 
 ## Open questions
 - Merge api#42 now, or wait for the load test?
+
+## Last
+The migration PR is approved and the load test is still running.
 
 ## In progress
 - ...

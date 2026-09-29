@@ -11,6 +11,8 @@ from rich.console import Console
 from rich.markdown import Markdown
 
 HEADING = re.compile(r"^#{1,6}\s")
+# The viewer shows the Summary line in its header, so the body skips it.
+SUMMARY = re.compile(r"^\W*summary\W*:", re.IGNORECASE)
 ITEM = re.compile(r"^(?:[-*+]|\d+[.)])\s")
 
 
@@ -25,7 +27,9 @@ def blocks(md):
             cur = None
 
     for line in md.splitlines():
-        if HEADING.match(line):
+        if SUMMARY.match(line) and not section:
+            flush()
+        elif HEADING.match(line):
             flush()
             section = line.lstrip("#").strip()
             out.append((section, "heading", line))

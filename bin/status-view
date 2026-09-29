@@ -40,7 +40,7 @@ else
 fi
 
 draw() {
-  local cols rows state meta updated usage dur err err_at line2 avail body
+  local cols rows state meta updated usage dur err err_at line1 line2 avail body title
   cols="$(tput cols)"; rows="$(tput lines)"
   state="$(cat "$dir/state" 2>/dev/null || echo idle)"
   meta="$(cat "$dir/meta.json" 2>/dev/null || echo '{}')"
@@ -83,8 +83,15 @@ draw() {
   fi)"
   body_lines="$(printf '%s\n' "$body" | wc -l)"
 
+  title="$(sed -nE '0,/^[*_ ]*[Ss]ummary[*_ ]*:[*_ ]*/s///p' "$dir/status.md" 2>/dev/null | head -1)"
+  title="${title:-status · $target}"
+  # The state label is 12 columns wide.
+  [ "${#title}" -gt $((cols - 14)) ] && title="${title:0:$((cols - 15))}…"
+  line2="$line2 · r a q"
+  [ "${#line2}" -gt "$cols" ] && line2="${line2% · r a q}"
+
   printf '\e[H\e[2J'
-  printf '\e[1mstatus\e[0m · %s  %s  \e[2mr refresh · a all · q close\e[0m\n' "$target" "$state"
+  printf '\e[1m%s\e[0m  %s\n' "$title" "$state"
   printf '\e[2m%s\e[0m\n' "$line2"
   [ -n "$err" ] && printf '\e[31m%s\e[0m\n' "$err"
   printf '\e[2m%s\e[0m\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"

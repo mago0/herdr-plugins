@@ -4,6 +4,6 @@ Below is the status you gave last time. Update it in place instead of writing a 
 - Move an item to another section only when its state changed, for example from In progress to Done.
 - Add new items where they belong.
 - Remove items that are no longer true or no longer relevant. Keep a bullet because it is still true, not because it was there before.
-- Change the summary sentence only if the overall picture changed.
+- Keep Summary unless the session's purpose changed. Always rewrite Last for the most recent turn.
 
 <previous_status>

@@ -8,17 +8,17 @@ updated 40s ago · 15s · 116k in (97% cached) · 1k out · total 480k
 ------------------------------------------------------------------
 The migration PR is approved and the load test is still running.
 
-**Done**
-- ...
-
-**In progress**
-- ...
-
-**Next**
-- ...
-
-**Open questions**
+## Open questions
 - Merge api#42 now, or wait for the load test?
+
+## In progress
+- ...
+
+## Next
+- ...
+
+## Done
+- ...
 ```
 
 ## How it works
@@ -27,7 +27,7 @@ The migration PR is approved and the load test is still running.
 2. `bin/status-refresh` gets the pane's Claude session id from herdr and forks the session: `claude -p --resume <id> --fork-session --no-session-persistence`, with the prompt in `prompt.md`. The fork has the full conversation, so the answer is the same one you get by asking. Nothing is added to the parent session.
 3. The fork keeps the parent's tool definitions, so it reads the parent's prompt cache. A `PreToolUse` hook passed with `--settings` blocks every tool call, so the fork can only answer from context. Removing tools with `--tools ""` would change the tool list and miss the cache.
 4. Refreshes are serialized per pane and run at most once per `HERDR_STATUS_MIN_INTERVAL` seconds (default 120). Triggers during the wait collapse into one trailing refresh.
-5. `bin/status-view` renders `status.md` with `bat`. Refresh is enabled only while the viewer runs.
+5. `bin/status-view` renders `status.md` with Python `rich`, or highlights it with `bat` when `rich` is missing. Refresh is enabled only while the viewer runs.
 
 The fork runs with `HERDR_*` and `ORCA_*` variables removed, so its own hooks cannot rebind the parent's herdr pane or trigger another refresh.
 
@@ -35,7 +35,8 @@ The fork runs with `HERDR_*` and `ORCA_*` variables removed, so its own hooks ca
 
 - herdr 0.9.0 or later, Linux or macOS
 - Claude Code with `--fork-session` and `--no-session-persistence`
-- `bash`, `jq`, `bat`, `flock`, `setsid`
+- `bash`, `jq`, `flock`, `setsid`
+- Python 3 with `rich` for rendered markdown (`pacman -S python-rich`, `pip install rich`), or `bat` as a fallback
 
 ## Install
 

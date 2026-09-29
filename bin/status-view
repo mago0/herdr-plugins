@@ -28,6 +28,13 @@ ago() {
 offset=0
 body_lines=0
 
+# Python rich renders the markdown; bat only highlights the source.
+if python3 -c 'import rich' 2>/dev/null; then
+  render() { python3 -m rich.markdown -c -w "$1" "$2"; }
+else
+  render() { fold -s -w "$1" "$2" | bat -l md --style=plain --color=always --paging=never --wrap=never; }
+fi
+
 draw() {
   local cols rows state meta updated usage dur err err_at line2 avail body
   cols="$(tput cols)"; rows="$(tput lines)"
@@ -36,7 +43,7 @@ draw() {
   updated="$(jq -r '.updated_at // 0' <<<"$meta")"
   dur="$(jq -r '(.duration_ms // 0) / 1000 | floor' <<<"$meta")"
   usage="$(jq -r '
-    def fmt: if . >= 1000000 then "\(. / 100000 | round / 10)M"
+    def fmt: if . >= 999500 then "\(. / 100000 | round / 10)M"
              elif . >= 1000 then "\(. / 1000 | round)k" else tostring end;
     "\(.tokens_in // 0 | fmt) in (\(if (.tokens_in // 0) > 0 then (.tokens_cached // 0) * 100 / .tokens_in | floor else 0 end)% cached) · \(.tokens_out // 0 | fmt) out · total \(.total_tokens // 0 | fmt)"
   ' <<<"$meta")"
@@ -55,7 +62,7 @@ draw() {
   esac
 
   body="$(if [ -s "$dir/status.md" ]; then
-    fold -s -w "$cols" "$dir/status.md" | bat -l md --style=plain --color=always --paging=never --wrap=never
+    render "$cols" "$dir/status.md"
   else
     echo "Waiting for the first status. It arrives when the next turn ends, or press r."
   fi)"

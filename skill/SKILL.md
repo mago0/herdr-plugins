@@ -5,7 +5,7 @@ description: Open, close, or refresh a herdr pane beside this Claude Code sessio
 
 # Herdr status pane
 
-A viewer pane to the right of this session shows the answer to "current status?" in a fixed Done / In progress / Next / Open questions layout. Each refresh forks this session in print mode with every tool call blocked, so the answer comes from the full conversation and adds nothing to it. Refresh runs at turn end, at most once per 120s, and only while the pane is open.
+A viewer pane to the right of this session shows the answer to "current status?" in a fixed Open questions / In progress / Next / Done layout. Each refresh forks this session in print mode with every tool call blocked, so the answer comes from the full conversation and adds nothing to it. Refresh runs at turn end, at most once per 120s, and only while the pane is open.
 
 Check `test "${HERDR_ENV:-}" = 1` first. If it fails, say the pane needs herdr and stop. Then find the plugin:
 

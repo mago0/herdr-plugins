@@ -11,6 +11,7 @@ dir="$(pane_dir "$pane")"
 mkdir -p "$dir"
 
 MIN_INTERVAL="${HERDR_STATUS_MIN_INTERVAL:-120}"
+MAX_PER_HOUR="${HERDR_STATUS_MAX_PER_HOUR:-20}"
 SETTLE_SECONDS=3
 # A prompt.md in the plugin's herdr config dir replaces the bundled one.
 PROMPT_FILE="${HERDR_STATUS_PROMPT_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/herdr-status-pane/prompt.md}"
@@ -28,7 +29,22 @@ flock -n 9 || exit 0
 
 now() { date +%s; }
 set_state() { printf '%s\n' "$1" > "$dir/state"; }
-trap 'set_state idle' EXIT
+# Stale and capped states persist so the viewer can show them and retry.
+trap 'case "$(cat "$dir/state" 2>/dev/null)" in running | waiting) set_state idle ;; esac' EXIT
+
+over_cap() {
+  local n
+  n="$(awk -v c="$(($(now) - 3600))" '$1 >= c' "$dir/runs" 2>/dev/null | wc -l)"
+  [ "$n" -ge "$MAX_PER_HOUR" ]
+}
+
+# Unforced refreshes run only while someone can see the pane, and at most MAX_PER_HOUR an hour.
+gate() {
+  [ -e "$dir/force" ] && return 0
+  viewer_visible "$dir" || { set_state stale; return 1; }
+  over_cap && { set_state capped; return 1; }
+  return 0
+}
 
 fail() {
   local meta='{}'
@@ -128,6 +144,7 @@ $(cat "$dir/status.md")
 
 while [ -e "$dir/pending" ]; do
   viewer_alive "$dir" || exit 0
+  gate || exit 0
   set_state waiting
   sleep "$SETTLE_SECONDS"
   last="$(cat "$dir/last_run" 2>/dev/null || echo 0)"
@@ -135,11 +152,14 @@ while [ -e "$dir/pending" ]; do
     viewer_alive "$dir" || exit 0
     sleep 1
   done
+  gate || exit 0
   # This run covers every trigger so far; later ones set pending again.
-  rm -f "$dir/force" "$dir/pending"
+  rm -f "$dir/force" "$dir/pending" "$dir/behind"
   set_state running
   run_fork
   now > "$dir/last_run"
+  now >> "$dir/runs"
+  tail -n 100 "$dir/runs" > "$dir/runs.tmp" && mv "$dir/runs.tmp" "$dir/runs"
 done
 
 # A trigger that lost the flock race after the last pending check.

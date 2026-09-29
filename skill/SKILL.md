@@ -5,7 +5,7 @@ description: Open, close, or refresh a herdr pane beside this Claude Code sessio
 
 # Herdr status pane
 
-A viewer pane to the right of this session shows the answer to "current status?" in a fixed layout, most pressing first: a Summary title in the header (what the session is for), then Open questions, Last (the latest turn), In progress, Next and Done. Each refresh forks this session in print mode with every tool call blocked, so the answer comes from the full conversation and adds nothing to it. Refresh runs at turn end, at most once per 120s, and only while the pane is open.
+A viewer pane to the right of this session shows the answer to "current status?" in a fixed layout, most pressing first: a Summary title in the header (what the session is for), then Open questions, Last (the latest turn), In progress, Next and Done. Each refresh forks this session in print mode with every tool call blocked, so the answer comes from the full conversation and adds nothing to it. Refresh runs at turn end, at most once per 120s and 20 times an hour, only while the pane is open and visible (its tab focused, screen unlocked). A hidden pane shows "stale · N behind" and catches up when you look at it.
 
 Check `test "${HERDR_ENV:-}" = 1` first. If it fails, say the pane needs herdr and stop. Then find the plugin:
 
@@ -37,4 +37,4 @@ Each refresh edits the previous status in place (rules in `$root/update.md`), an
 ## Tuning
 
 - Layout: copy `$root/prompt.md` to `~/.config/herdr/plugins/config/herdr-status-pane/prompt.md` and edit it.
-- Environment read by `status-refresh`: `HERDR_STATUS_MIN_INTERVAL` (seconds, default 120), `HERDR_STATUS_PROMPT_FILE`, `HERDR_STATUS_CLAUDE_BIN`.
+- Environment read by `status-refresh`: `HERDR_STATUS_MIN_INTERVAL` (seconds, default 120), `HERDR_STATUS_MAX_PER_HOUR` (default 20), `HERDR_STATUS_PROMPT_FILE`, `HERDR_STATUS_CLAUDE_BIN`.

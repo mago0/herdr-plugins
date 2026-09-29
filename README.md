@@ -30,9 +30,10 @@ The migration PR is approved and the load test is still running.
 2. `bin/status-refresh` gets the pane's Claude session id from herdr and forks the session: `claude -p --resume <id> --fork-session --no-session-persistence`, with the prompt in `prompt.md`. The fork has the full conversation, so the answer is the same one you get by asking. Nothing is added to the parent session.
 3. The fork keeps the parent's tool definitions, so it reads the parent's prompt cache. A `PreToolUse` hook passed with `--settings` blocks every tool call, so the fork can only answer from context. Removing tools with `--tools ""` would change the tool list and miss the cache.
 4. Refreshes are serialized per pane and run at most once per `HERDR_STATUS_MIN_INTERVAL` seconds (default 120). Triggers during the wait collapse into one trailing refresh.
-5. Each refresh after the first also sends the previous status with the rules in `update.md`, so the fork edits it in place: unchanged bullets keep their wording and order, and only items whose state changed move, appear or disappear.
-6. The status must fit the pane without scrolling. The viewer records its size, and the refresh sends the fork a line budget from `length.md`, with the rule to cut the oldest Done items first, then Next items. Open questions and In progress items are never cut. The refresh measures the rendered length, and if it ran over, the next prompt says by how much. If a status still doesn't fit, the viewer hides the oldest Done items, then Next items, and shows how many are hidden.
-7. `bin/status-view` renders `status.md` with Python `rich` (`bin/render.py`) and puts a yellow `▌` beside items that are new or changed since the last refresh. Without `rich` it falls back to `bat` highlighting and no marks. Refresh is enabled only while the viewer runs.
+5. A refresh runs only while someone can see the pane: its tab is herdr's focused tab and the screen is unlocked (Omarchy's `omarchy-hyprland-session-locked`, then logind `LockedHint`, then a running locker). Otherwise the pane shows "stale · N behind" and runs one catch-up refresh when it becomes visible again. At most `HERDR_STATUS_MAX_PER_HOUR` refreshes (default 20) run per pane per hour. `r` skips both checks. A session left looping overnight costs nothing until you look.
+6. Each refresh after the first also sends the previous status with the rules in `update.md`, so the fork edits it in place: unchanged bullets keep their wording and order, and only items whose state changed move, appear or disappear.
+7. The status must fit the pane without scrolling. The viewer records its size, and the refresh sends the fork a line budget from `length.md`, with the rule to cut the oldest Done items first, then Next items. Open questions and In progress items are never cut. The refresh measures the rendered length, and if it ran over, the next prompt says by how much. If a status still doesn't fit, the viewer hides the oldest Done items, then Next items, and shows how many are hidden.
+8. `bin/status-view` renders `status.md` with Python `rich` (`bin/render.py`) and puts a yellow `▌` beside items that are new or changed since the last refresh. Without `rich` it falls back to `bat` highlighting and no marks. Refresh is enabled only while the viewer runs.
 
 The fork runs with `HERDR_*` and `ORCA_*` variables removed, so its own hooks cannot rebind the parent's herdr pane or trigger another refresh.
 
@@ -86,7 +87,7 @@ ln -s "$root/skill" ~/.claude/skills/herdr-status-pane
 ## Configure
 
 - **Layout:** copy `prompt.md` to `~/.config/herdr/plugins/config/herdr-status-pane/prompt.md` and edit it. `update.md` holds the in-place update rules and `length.md` the line budget.
-- **Environment:** `HERDR_STATUS_MIN_INTERVAL`, `HERDR_STATUS_PROMPT_FILE`, `HERDR_STATUS_CLAUDE_BIN`.
+- **Environment:** `HERDR_STATUS_MIN_INTERVAL`, `HERDR_STATUS_MAX_PER_HOUR`, `HERDR_STATUS_PROMPT_FILE`, `HERDR_STATUS_CLAUDE_BIN`.
 
 ## Usage
 

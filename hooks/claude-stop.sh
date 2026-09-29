@@ -6,7 +6,10 @@ cat > /dev/null
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 . "$root/bin/lib.sh"
-viewer_alive "$(pane_dir "$HERDR_PANE_ID")" || exit 0
+dir="$(pane_dir "$HERDR_PANE_ID")"
+viewer_alive "$dir" || exit 0
+# Turns since the last refresh, shown while the pane is stale.
+echo $(($(cat "$dir/behind" 2>/dev/null || echo 0) + 1)) > "$dir/behind"
 
 setsid -f "$root/bin/status-refresh" "$HERDR_PANE_ID" > /dev/null 2>&1 < /dev/null
 exit 0

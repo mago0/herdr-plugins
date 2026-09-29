@@ -62,6 +62,8 @@ draw() {
   case "$state" in
     running) state=$'\e[33m● refreshing\e[0m' ;;
     waiting) state=$'\e[36m◔ queued\e[0m' ;;
+    stale) state=$'\e[2m◌ stale · '"$(cat "$dir/behind" 2>/dev/null || echo 1)"$' behind\e[0m' ;;
+    capped) state=$'\e[35m⏸ capped\e[0m' ;;
     *) state=$'\e[32m✓ idle\e[0m' ;;
   esac
 
@@ -99,14 +101,20 @@ draw() {
 }
 
 signature() {
-  stat -c '%Y' "$dir/status.md" "$dir/meta.json" "$dir/state" 2>/dev/null | tr '\n' ' '
+  stat -c '%Y' "$dir/status.md" "$dir/meta.json" "$dir/state" "$dir/behind" 2>/dev/null | tr '\n' ' '
   tput cols; tput lines
   echo $(( $(date +%s) / 30 ))
 }
 
 refresh
 last_sig=""
+tick=0
 while :; do
+  # A refresh skipped while the pane was hidden, locked or capped runs once the gate opens.
+  tick=$((tick + 1))
+  if [ $((tick % 5)) -eq 0 ] && [ -e "$dir/pending" ] && flock -n "$dir/lock" true; then
+    refresh
+  fi
   sig="$(signature)"
   if [ "$sig" != "$last_sig" ]; then
     draw

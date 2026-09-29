@@ -10,7 +10,7 @@ Summary: what this whole session is for, as a title of 60 characters or fewer. T
 - Decisions or answers you are waiting on from me.
 
 ## Last
-One or two sentences on what the most recent turn did or found.
+- One bullet, one or two sentences, on what the most recent turn did or found.
 
 ## In progress
 - What is running right now.

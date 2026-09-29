@@ -12,7 +12,7 @@ updated 40s ago · 15s · 116k in (97% cached) · 1k out · total 480k · r a q
 - Merge api#42 now, or wait for the load test?
 
 ## Last
-The migration PR is approved and the load test is still running.
+- The migration PR is approved and the load test is still running.
 
 ## In progress
 - ...

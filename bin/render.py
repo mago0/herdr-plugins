@@ -120,9 +120,9 @@ def main():
         return [(s.lower(), words(t)) for s, k, t in bs or [] if k in kinds]
 
     prev_blocks = comparable(previous, ("item", "para"))
-    # The counts cover list items; the Last paragraph changes on most refreshes.
-    prev_items = comparable(previous, ("item",))
-    cur_items = comparable(current, ("item",))
+    # The counts cover list items outside Last, which changes on most refreshes.
+    prev_items = [b for b in comparable(previous, ("item",)) if b[0] != "last"]
+    cur_items = [b for b in comparable(current, ("item",)) if b[0] != "last"]
 
     head = []
     if previous is not None:
@@ -137,6 +137,9 @@ def main():
     for i, (section, kind, text) in enumerate(current):
         is_new = previous is not None and kind != "heading" and not matched((section.lower(), words(text)), prev_blocks)
         mark = MARK if is_new else " "
+        # Prose under a heading renders as a bullet so every section lines up.
+        if kind == "para" and section:
+            text = "- " + text
         lines = [f"{mark} {line}" for line in render_block(inner, text)]
         if kind == "heading" and i:
             lines.insert(0, "")

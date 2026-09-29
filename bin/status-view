@@ -28,9 +28,9 @@ ago() {
 offset=0
 body_lines=0
 
-# Python rich renders the markdown; bat only highlights the source.
+# Python rich renders the markdown and marks changed items; bat only highlights the source.
 if python3 -c 'import rich' 2>/dev/null; then
-  render() { python3 -m rich.markdown -c -w "$1" "$2"; }
+  render() { python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md"; }
 else
   render() { fold -s -w "$1" "$2" | bat -l md --style=plain --color=always --paging=never --wrap=never; }
 fi

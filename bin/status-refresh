@@ -54,6 +54,13 @@ run_fork() {
   [ -d "$cwd" ] || { fail "session cwd '$cwd' not found"; return; }
 
   prompt="$(cat "$PROMPT_FILE")"
+  if [ -s "$dir/status.md" ]; then
+    prompt="$prompt
+
+$(cat "$here/../update.md")
+$(cat "$dir/status.md")
+</previous_status>"
+  fi
 
   # Without herdr/orca context the fork's own hooks can't rebind the parent pane or re-trigger this refresh.
   for v in $(compgen -e | grep -E '^(HERDR_|ORCA_)'); do unset_args+=(-u "$v"); done
@@ -71,6 +78,7 @@ run_fork() {
     return
   fi
 
+  [ -s "$dir/status.md" ] && cp "$dir/status.md" "$dir/status.prev.md"
   printf '%s\n' "$text" > "$dir/status.md.tmp" && mv "$dir/status.md.tmp" "$dir/status.md"
   dur="$(jq -r '.duration_ms // 0' <<<"$result")"
   usage="$(jq -c '.usage // {} | {

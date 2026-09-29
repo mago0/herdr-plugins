@@ -6,6 +6,8 @@ A [herdr](https://herdr.dev) pane beside a Claude Code session that shows a live
 status · w3:p9  ✓ idle
 updated 40s ago · 15s · 116k in (97% cached) · 1k out · total 480k
 ------------------------------------------------------------------
+▌ 1 new or changed · 0 removed since last refresh
+
 The migration PR is approved and the load test is still running.
 
 ## Open questions
@@ -27,7 +29,8 @@ The migration PR is approved and the load test is still running.
 2. `bin/status-refresh` gets the pane's Claude session id from herdr and forks the session: `claude -p --resume <id> --fork-session --no-session-persistence`, with the prompt in `prompt.md`. The fork has the full conversation, so the answer is the same one you get by asking. Nothing is added to the parent session.
 3. The fork keeps the parent's tool definitions, so it reads the parent's prompt cache. A `PreToolUse` hook passed with `--settings` blocks every tool call, so the fork can only answer from context. Removing tools with `--tools ""` would change the tool list and miss the cache.
 4. Refreshes are serialized per pane and run at most once per `HERDR_STATUS_MIN_INTERVAL` seconds (default 120). Triggers during the wait collapse into one trailing refresh.
-5. `bin/status-view` renders `status.md` with Python `rich`, or highlights it with `bat` when `rich` is missing. Refresh is enabled only while the viewer runs.
+5. Each refresh after the first also sends the previous status with the rules in `update.md`, so the fork edits it in place: unchanged bullets keep their wording and order, and only items whose state changed move, appear or disappear.
+6. `bin/status-view` renders `status.md` with Python `rich` (`bin/render.py`) and puts a yellow `▌` beside items that are new or changed since the last refresh. Without `rich` it falls back to `bat` highlighting and no marks. Refresh is enabled only while the viewer runs.
 
 The fork runs with `HERDR_*` and `ORCA_*` variables removed, so its own hooks cannot rebind the parent's herdr pane or trigger another refresh.
 
@@ -80,7 +83,7 @@ ln -s "$root/skill" ~/.claude/skills/herdr-status-pane
 
 ## Configure
 
-- **Layout:** copy `prompt.md` to `~/.config/herdr/plugins/config/herdr-status-pane/prompt.md` and edit it.
+- **Layout:** copy `prompt.md` to `~/.config/herdr/plugins/config/herdr-status-pane/prompt.md` and edit it. `update.md` holds the in-place update rules.
 - **Environment:** `HERDR_STATUS_MIN_INTERVAL`, `HERDR_STATUS_PROMPT_FILE`, `HERDR_STATUS_CLAUDE_BIN`.
 
 ## Usage

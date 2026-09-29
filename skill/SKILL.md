@@ -27,7 +27,7 @@ The same command toggles: it closes the pane when one is already open for this s
 "$root/bin/status-refresh" "$HERDR_PANE_ID" --force
 ```
 
-In the pane: `r` refreshes, `j`/`k` scroll, `q` closes. A refresh started mid-turn describes the turn as in progress.
+Each refresh edits the previous status in place (rules in `$root/update.md`), and the pane marks new or changed items with a yellow `▌`. In the pane: `r` refreshes, `j`/`k` scroll, `q` closes. A refresh started mid-turn describes the turn as in progress.
 
 ## Usage and state
 

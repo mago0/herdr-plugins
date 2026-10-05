@@ -4,7 +4,7 @@
 #
 #   dispatch.sh run     [--name <slug>]                         bind (create or resume) a run; later commands default to it
 #   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
-#                       [--kind <herdr kind>] [--base <ref>] [--heartbeat <min>] [--tab] [--after <dispatch>]... [-- <agent args>]
+#                       [--kind <herdr kind>] [--base <ref>] [--tab] [--after <dispatch>]... [-- <agent args>]
 #                       --tab: new tab in the caller's workspace instead of a workspace of its own
 #   dispatch.sh wait    [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
 #   dispatch.sh read    --id <msg>                               full message JSON
@@ -117,26 +117,13 @@ nudge() {
   fi
 }
 
-# Fold un-acked heartbeats into the ledger's last_heartbeat, then ack them. Any message from a
-# worker also counts as liveness in `ps` (via last-seen), so acking heartbeats loses nothing.
-sweep_heartbeats() {
-  local hb; hb=$("$MAIL" read --inbox "$INBOX" --unacked --types heartbeat)
-  [ -n "$hb" ] || return 0
-  local map; map=$(jq -sc 'group_by(.from) | map({key: .[0].from, value: (map(.ts) | max)}) | from_entries' <<<"$hb")
-  ledger_mod --argjson hb "$map" \
-    'map(if (.agent != null and $hb[.agent] != null and .status == "working")
-         then .last_heartbeat = ([(.last_heartbeat // ""), $hb[.agent]] | max) else . end)'
-  local a=(); while IFS= read -r i; do a+=(--id "$i"); done < <(jq -r .id <<<"$hb")
-  "$MAIL" ack --inbox "$INBOX" "${a[@]}" >/dev/null
-}
-
 launch_dispatch() {
   local D=$1 spec
   spec=$(entry "$D" | jq -c .launch)
   [ -n "$spec" ] && [ "$spec" != null ] || { echo "dispatch.sh: no launch spec for $D" >&2; return 1; }
   local args=(--repo "$(jq -r .repo <<<"$spec")" --branch "$(jq -r .branch <<<"$spec")" \
               --name "$(jq -r .name <<<"$spec")" \
-              --prompt-file "$(jq -r .task <<<"$spec")" --run-dir "$RUN_DIR" --heartbeat "$(jq -r .heartbeat <<<"$spec")")
+              --prompt-file "$(jq -r .task <<<"$spec")" --run-dir "$RUN_DIR")
   # No kind in the spec means inherit the caller's: the launcher resolves it.
   local kind; kind=$(jq -r '.kind // ""' <<<"$spec"); [ -z "$kind" ] || args+=(--kind "$kind")
   local base; base=$(jq -r '.base // ""' <<<"$spec"); [ -z "$base" ] || args+=(--base "$base")
@@ -154,7 +141,7 @@ launch_dispatch() {
   case "$st" in working|idle|done|blocked|unknown) ls=working ;; *) ls=failed_start ;; esac
   ledger_mod --arg d "$D" --arg ts "$(now)" --arg ls "$ls" --argjson r "$receipt" \
     'map(if .dispatch == $d then . + {launch: (.launch + {kind: $r.kind}),
-          status: $ls, started: $ts, last_heartbeat: $ts, agent: $r.agent,
+          status: $ls, started: $ts, agent: $r.agent,
           placement: ($r.placement // "workspace"), tab_id: $r.tab_id,
           workspace_id: $r.workspace_id, pane_id: $r.pane_id, worktree: $r.worktree, branch: $r.branch,
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
@@ -230,12 +217,12 @@ case "$CMD" in
 
   start)
     bind_run
-    REPO= BRANCH= NAME= KIND= TASK= BASE= HB=10 TAB=false; AFTER=(); AARGS=()
+    REPO= BRANCH= NAME= KIND= TASK= BASE= TAB=false; AFTER=(); AARGS=()
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo) REPO=$2; shift 2 ;; --branch) BRANCH=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --kind) KIND=$2; shift 2 ;; --task) TASK=$2; shift 2 ;; --base) BASE=$2; shift 2 ;;
-        --heartbeat) HB=$2; shift 2 ;; --after) AFTER+=("$2"); shift 2 ;; --tab) TAB=true; shift ;;
+        --after) AFTER+=("$2"); shift 2 ;; --tab) TAB=true; shift ;;
         --) shift; AARGS=("$@"); break ;;
         *) die "start: unknown option $1" ;;
       esac
@@ -246,12 +233,12 @@ case "$CMD" in
     D=$(new_id)
     AARGS_JSON=$(printf '%s\n' "${AARGS[@]+"${AARGS[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     SPEC=$(jq -cn --arg repo "$REPO" --arg branch "$BRANCH" --arg name "$NAME" --arg kind "$KIND" --arg base "$BASE" \
-      --arg task "$TASK" --argjson hb "$HB" --argjson aargs "$AARGS_JSON" --argjson tab "$TAB" \
-      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, heartbeat: $hb, agent_args: $aargs, tab: $tab}')
+      --arg task "$TASK" --argjson aargs "$AARGS_JSON" --argjson tab "$TAB" \
+      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, agent_args: $aargs, tab: $tab}')
     AFTER_JSON=$(printf '%s\n' "${AFTER[@]+"${AFTER[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     ledger_mod --arg d "$D" --arg ts "$(now)" --argjson spec "$SPEC" --argjson after "$AFTER_JSON" \
       '. + [{dispatch: $d, attempt: 1, supersedes: null, after: $after, status: "pending", outcome: null, decision: null,
-             created: $ts, started: null, settled: null, last_heartbeat: null, agent: null, launch: $spec}]'
+             created: $ts, started: null, settled: null, agent: null, launch: $spec}]'
     if deps_met "$D"; then launch_dispatch "$D"
     else jq -cn --arg d "$D" --argjson after "$AFTER_JSON" '{dispatch: $d, status: "pending", after: $after}'; fi
     ;;
@@ -260,10 +247,7 @@ case "$CMD" in
     bind_run
     TYPES=status,question,escalation,worker_done TIMEOUT=0
     while [ $# -gt 0 ]; do case "$1" in --types) TYPES=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;; *) die "wait: unknown option $1" ;; esac; done
-    sweep_heartbeats
-    rc=0; "$MAIL" wait --inbox "$INBOX" --types "$TYPES" --timeout "$TIMEOUT" || rc=$?
-    sweep_heartbeats
-    exit $rc
+    "$MAIL" wait --inbox "$INBOX" --types "$TYPES" --timeout "$TIMEOUT"
     ;;
 
   read)
@@ -326,31 +310,25 @@ case "$CMD" in
   ps)
     bind_run
     JSON=0; while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
-    sweep_heartbeats
     [ -z "${HERDR_PANE_ID:-}" ] || set_pending "$HERDR_PANE_ID" false
     UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
-    LASTSEEN=$(jq -sc 'group_by(.from) | map({key: .[0].from, value: (map(.ts) | max)}) | from_entries' "$INBOX")
     AS='{}'
     for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
       ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent.agent_status // "missing"' || echo missing)
       AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
     done
-    ROWS=$(jq -c --arg now "$(now)" --argjson un "$UNACKED" --argjson ls "$LASTSEEN" --argjson as "$AS" --arg mail "$0" '
-      def tsec: if . == null or . == "" then null else fromdateiso8601 end;
-      ($now | tsec) as $n
-      | (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
+    ROWS=$(jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" '
+      (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
       | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
       | .[]
       | . as $e
-      | (($e.launch.heartbeat // 10) * 60 * 2) as $stale
       | ($un | map(select(.from == $e.agent))) as $mine
       | (if $e.status == "pending" then "-"
          elif $e.status != "working" then $e.status
          else ($as[$e.agent] // "missing") as $st
            | if $st == "missing" then "exited"
              elif $st == "blocked" then "stuck"
-             else ([($e.last_heartbeat | tsec), ($ls[$e.agent] | tsec), ($e.started | tsec)] | map(select(. != null)) | max) as $seen
-               | if ($n - $seen) > $stale then "stuck" else "live" end
+             else "live"
              end
          end) as $live
       | (($e.after // []) | map(select(. as $a | $bad | any(. == $a)))) as $failed_deps
@@ -390,7 +368,7 @@ case "$CMD" in
     OLD=$(entry "$D"); [ -n "$OLD" ] || die "no dispatch $D in run $RUN"
     N=$(new_id)
     NEW=$(jq -c --arg n "$N" --arg ts "$(now)" '{dispatch: $n, attempt: (.attempt + 1), supersedes: .dispatch, after: .after,
-      status: "pending", outcome: null, decision: null, created: $ts, started: null, settled: null, last_heartbeat: null, agent: null, launch: .launch}' <<<"$OLD")
+      status: "pending", outcome: null, decision: null, created: $ts, started: null, settled: null, agent: null, launch: .launch}' <<<"$OLD")
     ledger_mod --arg d "$D" --argjson n "$NEW" 'map(if .dispatch == $d and .status != "settled" then .status = "abandoned" else . end) + [$n]'
     if deps_met "$N"; then launch_dispatch "$N"; else jq -cn --arg d "$N" '{dispatch: $d, status: "pending"}'; fi
     ;;
@@ -424,7 +402,7 @@ case "$CMD" in
         *) die "report: unknown option $1" ;;
       esac
     done
-    case "$TYPE" in status|question|escalation|worker_done|heartbeat) ;; *) die "report: --type must be status|question|escalation|worker_done|heartbeat" ;; esac
+    case "$TYPE" in status|question|escalation|worker_done) ;; *) die "report: --type must be status|question|escalation|worker_done" ;; esac
     SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
       ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
     echo "$SENT"

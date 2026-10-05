@@ -7,7 +7,7 @@
 #                                                                # prints MAIL|<id>|<type>|<from>|<subject> per message; exit 124 on timeout
 #   mail.sh watch --inbox F [--interval SECONDS] [--types T,T]   # Monitor loop: prints each un-acked message once per process
 #
-# Types: status question escalation worker_done heartbeat reply followup
+# Types: status question escalation worker_done reply followup
 # Delivery is ack-based: `read --unacked`, `wait`, and `watch` see a message until someone acks it,
 # so a message sent while no reader ran, or read by a reader that then died, is still delivered.
 set -euo pipefail
@@ -41,8 +41,8 @@ mail_line() { jq -r '"MAIL|\(.id)|\(.type)|\(.from)|\(.subject | gsub("[\n|]"; "
 
 case "$CMD" in
   send)
-    case "$TYPE" in status|question|escalation|worker_done|heartbeat|reply|followup) ;;
-      *) echo "mail.sh: --type must be status|question|escalation|worker_done|heartbeat|reply|followup" >&2; exit 2 ;; esac
+    case "$TYPE" in status|question|escalation|worker_done|reply|followup) ;;
+      *) echo "mail.sh: --type must be status|question|escalation|worker_done|reply|followup" >&2; exit 2 ;; esac
     [ -n "$FROM" ] && [ -n "$SUBJECT" ] || { echo "mail.sh: --from and --subject are required" >&2; exit 2; }
     [ "$TYPE" != reply ] || [ -n "$REPLY_TO" ] || { echo "mail.sh: --type reply needs --reply-to" >&2; exit 2; }
     [ -z "$BODY_FILE" ] || BODY=$(cat "$BODY_FILE")

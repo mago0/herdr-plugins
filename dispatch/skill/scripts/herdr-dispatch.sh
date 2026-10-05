@@ -7,20 +7,20 @@ set -euo pipefail
 usage() {
   cat >&2 <<'EOF'
 Usage: herdr-dispatch.sh --repo <path> --branch <name> --name <agent-name> --prompt-file <file>
-                         [--base <ref>] [--kind <herdr agent kind>] [--heartbeat <minutes>]
+                         [--base <ref>] [--kind <herdr agent kind>]
                          [--tab] [--run-dir <dir> | --inbox <file>]
                          [-- <native agent args>...]
   --tab      open the worker as a new tab in the caller's Herdr workspace instead of its own
              workspace. The worktree path is the same; release closes the tab and runs
              `git worktree remove`.
-  --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl, a per-worker inbox for replies,
-             and a heartbeat obligation (default 10 min). Used by dispatch.sh.
-  --inbox    legacy single-mailbox mode (no worker inbox, no heartbeats).
+  --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl and a per-worker inbox for replies.
+             Used by dispatch.sh.
+  --inbox    legacy single-mailbox mode (no worker inbox, no supervisor wake).
 EOF
   exit 2
 }
 
-REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= HEARTBEAT=10 TAB_MODE=
+REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= TAB_MODE=
 AGENT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -33,7 +33,6 @@ while [ $# -gt 0 ]; do
     --prompt-file) PROMPT_FILE=$2; shift 2 ;;
     --inbox) INBOX=$2; shift 2 ;;
     --run-dir) RUN_DIR=$2; shift 2 ;;
-    --heartbeat) HEARTBEAT=$2; shift 2 ;;
     --) shift; AGENT_ARGS+=("$@"); break ;;
     *) usage ;;
   esac
@@ -136,7 +135,6 @@ You are dispatched agent \`$NAME\`. Your supervisor reads a mailbox, not your te
 
 Types:
 - \`status\` - progress or a result; you keep working.
-- \`heartbeat\` - liveness only. Send one every $HEARTBEAT minutes while you are working. It proves you are alive, not done.
 - \`question\` - you need an answer. See "Your inbox" below for how the reply arrives.
 - \`escalation\` - blocked, a human is needed.
 - \`worker_done\` - task complete or abandoned. Send exactly once, with \`--outcome succeeded\` or \`--outcome failed\` (never encode failure only in prose), and a three-sentence summary in --body-file. After sending it, stop and idle; do not start new work.
@@ -229,10 +227,10 @@ fi
 
 jq -n --arg agent "$NAME" --arg kind "$KIND" --arg ws "$WS" --arg pane "$PANE" --arg wt "$WT" \
   --arg branch "$BRANCH" --arg root "$ROOT" --arg inbox "$INBOX" --arg winbox "$WORKER_INBOX" --arg rundir "$RUN_DIR" \
-  --arg status "$STATUS" --arg task "$TASK_FILE" --arg detail "$START" --argjson hb "$HEARTBEAT" --arg tab "$TAB" \
+  --arg status "$STATUS" --arg task "$TASK_FILE" --arg detail "$START" --arg tab "$TAB" \
   '{backend:"herdr", agent:$agent, kind:$kind, placement:(if $tab == "" then "workspace" else "tab" end),
     workspace_id:$ws, tab_id:(if $tab == "" then null else $tab end), pane_id:$pane, worktree:$wt,
-    branch:$branch, repo_root:$root, inbox:$inbox, worker_inbox:$winbox, run_dir:$rundir, heartbeat_min:$hb,
+    branch:$branch, repo_root:$root, inbox:$inbox, worker_inbox:$winbox, run_dir:$rundir,
     task_file:$task, status:$status}
    + (if ($status | startswith("start_failed")) then {detail:$detail} else {} end)'
 case "$STATUS" in working|idle|done) exit 0 ;; *) exit 3 ;; esac

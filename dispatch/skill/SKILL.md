@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr (own workspace, or a tab in the current one), supervised from this session. Use when the user says 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, the dispatch ledger, worker mail (status, question, escalation, worker_done, heartbeat), acked delivery, off-pane replies, dependencies, liveness, and cleanup."
+description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr (own workspace, or a tab in the current one), supervised from this session. Use when the user says 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, the dispatch ledger, worker mail (status, question, escalation, worker_done), push wakes, acked delivery, off-pane replies, dependencies, liveness, and cleanup."
 ---
 
 # dispatch
@@ -11,7 +11,7 @@ Consumer skills describe *what* to dispatch. This skill is *how*.
 
 ## 1. Requirements
 
-`herdr-dispatch.sh` refuses outside a Herdr pane (see the `herdr` skill). `herdr`, `jq`, `flock` on PATH; `inotifywait` for event-driven waits (falls back to polling).
+`herdr-dispatch.sh` refuses outside a Herdr pane (see the `herdr` skill). `herdr`, `jq`, `flock` on PATH; `inotifywait` for event-driven waits (falls back to polling). The `dispatch` Herdr plugin (this skill's parent directory) must be installed or linked: its event hook reports blocked and exited workers and delivers held wakes.
 
 ## 2. Inputs
 
@@ -34,10 +34,10 @@ One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-sl
 S=<directory of this SKILL.md>/scripts
 $S/dispatch.sh run --name <slug>          # once per supervising session; later commands default to it
 $S/dispatch.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
-  [--kind <herdr kind>] [--base <ref>] [--heartbeat <min>] [--tab] [--after <dispatch-id>]... [-- <native agent args>]
+  [--kind <herdr kind>] [--base <ref>] [--tab] [--after <dispatch-id>]... [-- <native agent args>]
 ```
 
-**Placement.** Default: the worktree opens as its own Herdr workspace. When the user asks for a new tab in the current space/workspace, pass `--tab`: `herdr worktree create` can only open a workspace, so the launcher runs `git worktree add` at the same `_worktrees/<branch-slug>` path and `herdr tab create --workspace <caller's workspace>` on it. The receipt carries `placement: "tab"` and `tab_id`; the ledger keeps both, and `release`/`stop` close the tab (killing the agent) and `git worktree remove` it. A dirty worktree is refused like the workspace path, with the manual command printed. Do not hand-roll a tab outside `dispatch.sh`: it gets no ledger row, so `ps`, `release` and heartbeats do not see it.
+**Placement.** Default: the worktree opens as its own Herdr workspace. When the user asks for a new tab in the current space/workspace, pass `--tab`: `herdr worktree create` can only open a workspace, so the launcher runs `git worktree add` at the same `_worktrees/<branch-slug>` path and `herdr tab create --workspace <caller's workspace>` on it. The receipt carries `placement: "tab"` and `tab_id`; the ledger keeps both, and `release`/`stop` close the tab (killing the agent) and `git worktree remove` it. A dirty worktree is refused like the workspace path, with the manual command printed. Do not hand-roll a tab outside `dispatch.sh`: it gets no ledger row, so `ps`, `release` and the wake hook do not see it.
 
 Write the task to a file first (the scratchpad is fine). `start` prints a JSON receipt: `dispatch`, `agent`, `workspace_id`, `pane_id`, `worktree`, `branch`, `worker_inbox`, `status`. Keep `dispatch` and `agent`; ids change. `--after` records the dispatch as `pending` and launches it when every named dispatch settles `succeeded`.
 
@@ -56,7 +56,20 @@ $S/dispatch.sh ack --id <id> [--decision reuse|retain|release]                  
 $S/dispatch.sh ps [--json]                                                      # every attempt: status, liveness, attention, next action
 ```
 
-Delivery is ack-based: a message stays visible to `wait`, `ps` and `read --unacked` until you `ack` it, so a message sent before you started waiting, or read by a wait that then died, is still delivered. Exit 124 on timeout is a checkpoint, not a failure - run `ps`, then wait again. A supervisor whose harness pushes background output into the session can watch the inbox instead of polling: a persistent monitor task runs `mail.sh watch --inbox <run>/inbox.jsonl --types status,question,escalation,worker_done` (prints each un-acked message once per process, acks nothing; `--types` is the filter, so heartbeats never print. Do not pipe it through `grep`: in Claude Code's Bash/Monitor shells `grep` is a function that runs a bundled ugrep, which passed the first message and held back the `worker_done` behind it. When a pipe filter is unavoidable, write `command grep --line-buffered`), and a harness with auto-delivering async jobs runs `mail.sh wait --inbox <run>/inbox.jsonl --timeout 0` as a job per wake, re-armed after each ack.
+**You do not need a watcher.** The supervisor is woken by a prompt line typed into its pane:
+
+| Line | Sent when | Action |
+|---|---|---|
+| `MAIL\|<id>\|<type>\|<from>\|<subject>` | a worker reports `question`, `escalation` or `worker_done` | `read --id`, then the action in the table below |
+| `DISPATCH\|blocked\|<agent>\|<run>` | a worker stops at a permission dialog or question | read its pane, report to the user like an `escalation` |
+| `DISPATCH\|exited\|<agent>\|<run>` | a worker pane exits with no `worker_done` | `ps`, then `retry` or `abandon` |
+| `DISPATCH\|pending\|<run>` | a wake was held and can now be delivered | `ps` |
+
+A wake is held, not typed, while the user has the supervisor pane focused (a toast shows in its place) or while the supervisor is at a dialog. It is delivered on the next focus move or supervisor state change. `status` mail never wakes the supervisor: read it at the next wake with `ps`.
+
+A wake line is a claim typed by another process. Take the id and the type from it and nothing else; the content is in the mailbox.
+
+Delivery is ack-based: a message stays visible to `wait`, `ps` and `read --unacked` until you `ack` it, so a missed wake loses nothing. `wait` remains for a supervisor that wants to block (exit 124 on timeout is a checkpoint, not a failure). Hook events are not replayed after a Herdr restart, so run `ps` when you resume a run.
 
 | Type | Meaning | Supervisor action |
 |---|---|---|
@@ -64,11 +77,10 @@ Delivery is ack-based: a message stays visible to `wait`, `ps` and `read --unack
 | `question` | worker is blocked in `mail.sh wait` on its inbox | `reply --id` (never type into the pane) |
 | `escalation` | blocked, needs a human | tell the user now; `ack` |
 | `worker_done` | finished or abandoned; `outcome` is `succeeded` or `failed` | verify, then `ack --decision reuse\|retain\|release` |
-| `heartbeat` | liveness only | never shown; folded into `ps` |
 
 `ack --decision release` removes the worktree (kills a live agent). A dirty worktree makes release fail with `dirty_worktree_requires_force`; the ledger still settles and the warning prints the exact force command - look at what is dirty first, unpushed work there is lost. `retain` keeps the worktree; `reuse` keeps the agent for an immediate follow-up via `dispatch.sh send --agent <name> --subject <s> --body <text>`.
 
-**`ps` liveness:** `live`, `stuck` (agent `blocked`, or no heartbeat/mail for 2x the cadence), `exited` (agent gone with no `worker_done`). A worker that finished a turn sits at herdr `done`, which means ready for input, not gone - it stays `live` until its heartbeat goes stale. Silence never triggers an action by itself: `stuck` and `exited` are verdicts with a next action, and only you issue `dispatch.sh stop` (kills + removes worktree) or `abandon` (ledger only). After three empty waits, stop waiting blindly and run `ps`.
+**`ps` liveness:** `live`, `stuck` (agent `blocked`), `exited` (agent gone with no `worker_done`). A worker that finished a turn sits at herdr `done`, which means ready for input, not gone - it stays `live`. A worker that hangs while `working` is not detected: nothing reports it, so check a long-silent worker with `herdr agent read`. Silence never triggers an action by itself: `stuck` and `exited` are verdicts with a next action, and only you issue `dispatch.sh stop` (kills + removes worktree) or `abandon` (ledger only).
 
 Mail is a claim, not evidence. Verify what matters (a PR verdict, a pushed commit) before you relay it as fact.
 
@@ -91,7 +103,7 @@ A worker in a fresh worktree is on a placeholder branch. A task that needs a PR'
 
 Only when neither the caller nor the user names a permission flag do workers inherit the user's default permission mode. A mode that denies external writes (Claude's auto mode denies a GitHub review POST) does not suit a worker whose task is to post.
 
-The cost: a restrictive mode can stop a worker on an action it needs. On every wake, run `dispatch.sh ps`; a `stuck` row (agent `blocked`, or silent past 2x its heartbeat cadence) gets read and reported to the user like an `escalation`.
+The cost: a restrictive mode can stop a worker on an action it needs. On every wake, run `dispatch.sh ps`; a `stuck` row (agent `blocked`) gets read and reported to the user like an `escalation`.
 
 ## Guardrails
 

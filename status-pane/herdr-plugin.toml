@@ -1,0 +1,18 @@
+id = "herdr-status-pane"
+name = "Status Pane"
+version = "0.1.0"
+description = "Live 'current status?' answer from a Claude Code session, in a pane beside it."
+min_herdr_version = "0.9.0"
+platforms = ["linux", "macos"]
+
+[[panes]]
+id = "status"
+title = "Status"
+placement = "split"
+command = ["bash", "bin/status-view"]
+
+[[actions]]
+id = "toggle"
+title = "Toggle status pane"
+description = "Open or close the status pane for the focused Claude Code pane."
+command = ["bash", "bin/open-status-pane"]

@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# Forks the Claude Code session in a herdr pane, asks it for status, and writes status.md.
+# Usage: status-refresh <pane_id> [--force]
+set -uo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$here/lib.sh"
+
+pane="${1:?usage: status-refresh <pane_id> [--force]}"
+force="${2:-}"
+dir="$(pane_dir "$pane")"
+mkdir -p "$dir"
+
+MIN_INTERVAL="${HERDR_STATUS_MIN_INTERVAL:-120}"
+MAX_PER_HOUR="${HERDR_STATUS_MAX_PER_HOUR:-20}"
+SETTLE_SECONDS=3
+# A prompt.md in the plugin's herdr config dir replaces the bundled one.
+PROMPT_FILE="${HERDR_STATUS_PROMPT_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/herdr-status-pane/prompt.md}"
+[ -r "$PROMPT_FILE" ] || PROMPT_FILE="$here/../prompt.md"
+CLAUDE_BIN="${HERDR_STATUS_CLAUDE_BIN:-$(command -v claude || echo claude)}"
+# Tool definitions must match the parent session so the fork reads its prompt cache; this hook blocks every call instead.
+DENY_SETTINGS='{"hooks":{"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"echo \"Status snapshot: tools are disabled. Answer from the conversation only.\" >&2; exit 2"}]}]}}'
+
+[ "$force" = --force ] && touch "$dir/force"
+touch "$dir/pending"
+
+exec 9>"$dir/lock"
+# A running loop picks up the pending/force markers.
+flock -n 9 || exit 0
+
+now() { date +%s; }
+set_state() { printf '%s\n' "$1" > "$dir/state"; }
+# Stale and capped states persist so the viewer can show them and retry.
+trap 'case "$(cat "$dir/state" 2>/dev/null)" in running | waiting) set_state idle ;; esac' EXIT
+
+over_cap() {
+  local n
+  n="$(awk -v c="$(($(now) - 3600))" '$1 >= c' "$dir/runs" 2>/dev/null | wc -l)"
+  [ "$n" -ge "$MAX_PER_HOUR" ]
+}
+
+# Unforced refreshes run only while someone can see the pane, and at most MAX_PER_HOUR an hour.
+gate() {
+  [ -e "$dir/force" ] && return 0
+  viewer_visible "$dir" || { set_state stale; return 1; }
+  over_cap && { set_state capped; return 1; }
+  return 0
+}
+
+fail() {
+  local meta='{}'
+  [ -s "$dir/meta.json" ] && meta="$(cat "$dir/meta.json")"
+  jq --arg e "$1" --argjson t "$(now)" '. + {error: $e, error_at: $t}' <<<"$meta" > "$dir/meta.json.tmp" \
+    && mv "$dir/meta.json.tmp" "$dir/meta.json"
+}
+
+# Lines the fork may use: the viewer's body rows minus the changed-items line and its blank.
+read_size() {
+  cols="" rows=""
+  read -r cols rows < "$dir/size" 2>/dev/null || return 1
+  [ -n "$cols" ] && [ -n "$rows" ] && rows=$((rows - 2))
+}
+
+budget_prompt() {
+  local cols rows last
+  read_size || return 0
+  prompt="$prompt
+
+$(sed -e "s/{{cols}}/$cols/g" -e "s/{{rows}}/$rows/g" -e "s/{{wrap}}/$((cols - 5))/g" "$here/../length.md")"
+  last="$(jq -r 'select(.lines and .budget and .lines > .budget) | "\(.lines) \(.budget)"' "$dir/meta.json" 2>/dev/null)"
+  if [ -n "$last" ]; then
+    set -- $last
+    prompt="$prompt
+Your last status needed $1 lines and the pane showed $2. Cut at least $(($1 - $2)) lines this time."
+  fi
+}
+
+# Rendered length of the new status, stored in meta.json so the next prompt can correct an overflow.
+measure() {
+  local cols rows lines
+  read_size || return 0
+  lines="$(python3 "$here/render.py" "$cols" "$dir/status.md" --count 2>/dev/null)" || return 0
+  jq --argjson l "$lines" --argjson b "$rows" '. + {lines: $l, budget: $b}' "$dir/meta.json" > "$dir/meta.json.tmp" \
+    && mv "$dir/meta.json.tmp" "$dir/meta.json"
+}
+
+run_fork() {
+  local info agent sid tx cwd rc result text dur usage prompt prev v
+  local unset_args=()
+
+  info="$("$HERDR_BIN" pane get "$pane" 2>/dev/null)" || { fail "pane $pane not found"; return; }
+  agent="$(jq -r '.result.pane.agent // empty' <<<"$info")"
+  sid="$(jq -r '.result.pane.agent_session.value // empty' <<<"$info")"
+  if [ "$agent" != claude ] || [ -z "$sid" ]; then
+    fail "pane $pane has no Claude Code session (agent: ${agent:-none})"
+    return
+  fi
+  tx="$(ls "$HOME"/.claude/projects/*/"$sid".jsonl 2>/dev/null | head -1)"
+  [ -n "$tx" ] || { fail "transcript for session $sid not found"; return; }
+  cwd="$(grep -m1 '"cwd"' "$tx" | jq -r '.cwd // empty')"
+  [ -d "$cwd" ] || { fail "session cwd '$cwd' not found"; return; }
+
+  prompt="$(cat "$PROMPT_FILE")"
+  budget_prompt
+  if [ -s "$dir/status.md" ]; then
+    prompt="$prompt
+
+$(cat "$here/../update.md")
+$(cat "$dir/status.md")
+</previous_status>"
+  fi
+
+  # Without herdr/orca context the fork's own hooks can't rebind the parent pane or re-trigger this refresh.
+  for v in $(compgen -e | grep -E '^(HERDR_|ORCA_)'); do unset_args+=(-u "$v"); done
+
+  (cd "$cwd" && env "${unset_args[@]}" HERDR_STATUS_FORK=1 timeout 300 "$CLAUDE_BIN" -p \
+    --resume "$sid" --fork-session --no-session-persistence \
+    --settings "$DENY_SETTINGS" --output-format json "$prompt") \
+    > "$dir/fork.json" 2> "$dir/fork.err" < /dev/null
+  rc=$?
+
+  result="$(jq -c 'if type == "array" then (map(select(.type == "result")) | last) else . end' "$dir/fork.json" 2>/dev/null)"
+  text="$(jq -r '.result // empty' <<<"${result:-null}")"
+  if [ "$rc" -ne 0 ] || [ -z "$text" ] || [ "$(jq -r '.is_error // false' <<<"$result")" = true ]; then
+    fail "fork failed (exit $rc): $(tail -c 300 "$dir/fork.err" | tr '\n' ' ')"
+    return
+  fi
+
+  [ -s "$dir/status.md" ] && cp "$dir/status.md" "$dir/status.prev.md"
+  printf '%s\n' "$text" > "$dir/status.md.tmp" && mv "$dir/status.md.tmp" "$dir/status.md"
+  dur="$(jq -r '.duration_ms // 0' <<<"$result")"
+  usage="$(jq -c '.usage // {} | {
+      cached: (.cache_read_input_tokens // 0),
+      input: ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)),
+      output: (.output_tokens // 0)}' <<<"$result")"
+  prev="$(jq -r '.total_tokens // 0' "$dir/meta.json" 2>/dev/null || echo 0)"
+  jq -n --argjson t "$(now)" --argjson d "$dur" --argjson u "$usage" --argjson prev "${prev:-0}" --arg s "$sid" \
+    '{updated_at: $t, duration_ms: $d, session_id: $s, tokens_in: $u.input, tokens_cached: $u.cached,
+      tokens_out: $u.output, total_tokens: ($prev + $u.input + $u.output)}' \
+    > "$dir/meta.json.tmp" && mv "$dir/meta.json.tmp" "$dir/meta.json"
+  jq -r --arg ts "$(date -Is)" --arg p "$pane" --arg s "$sid" --argjson d "$dur" \
+    '[$ts, $p, $s, .input, .cached, .output, $d] | @tsv' <<<"$usage" >> "$STATE_ROOT/usage.tsv"
+  measure
+}
+
+while [ -e "$dir/pending" ]; do
+  viewer_alive "$dir" || exit 0
+  gate || exit 0
+  set_state waiting
+  sleep "$SETTLE_SECONDS"
+  last="$(cat "$dir/last_run" 2>/dev/null || echo 0)"
+  while [ "$(now)" -lt $((last + MIN_INTERVAL)) ] && [ ! -e "$dir/force" ]; do
+    viewer_alive "$dir" || exit 0
+    sleep 1
+  done
+  gate || exit 0
+  # This run covers every trigger so far; later ones set pending again.
+  rm -f "$dir/force" "$dir/pending" "$dir/behind"
+  set_state running
+  run_fork
+  now > "$dir/last_run"
+  now >> "$dir/runs"
+  tail -n 100 "$dir/runs" > "$dir/runs.tmp" && mv "$dir/runs.tmp" "$dir/runs"
+done
+
+# A trigger that lost the flock race after the last pending check.
+flock -u 9
+[ -e "$dir/pending" ] && exec "$0" "$pane"
+exit 0

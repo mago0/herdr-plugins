@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Status viewer pane: renders status.md for the agent pane in $HERDR_STATUS_TARGET.
+# Refresh on turn end is enabled only while this viewer runs.
+set -uo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$here/lib.sh"
+
+target="${HERDR_STATUS_TARGET:?HERDR_STATUS_TARGET not set}"
+dir="$(pane_dir "$target")"
+mkdir -p "$dir"
+echo $$ > "$dir/enabled"
+[ -n "${HERDR_PANE_ID:-}" ] && echo "$HERDR_PANE_ID" > "$dir/viewer_pane"
+
+cleanup() { rm -f "$dir/enabled" "$dir/viewer_pane"; tput cnorm 2>/dev/null; }
+trap cleanup EXIT
+trap 'exit 0' INT TERM HUP
+tput civis 2>/dev/null
+
+refresh() { setsid -f "$here/status-refresh" "$target" "$@" >/dev/null 2>&1 < /dev/null; }
+
+ago() {
+  local s=$(( $(date +%s) - $1 ))
+  if [ "$s" -lt 60 ]; then echo "${s}s ago"
+  elif [ "$s" -lt 3600 ]; then echo "$((s / 60))m ago"
+  else echo "$((s / 3600))h$(( (s % 3600) / 60 ))m ago"; fi
+}
+
+offset=0
+body_lines=0
+show_all=0
+
+# Python rich renders the markdown and marks changed items; bat only highlights the source.
+if python3 -c 'import rich' 2>/dev/null; then
+  render() {
+    if [ "$show_all" = 1 ]; then python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md"
+    else python3 "$here/render.py" "$1" "$2" "$dir/status.prev.md" --max-rows "$3"; fi
+  }
+else
+  render() { fold -s -w "$1" "$2" | bat -l md --style=plain --color=always --paging=never --wrap=never; }
+fi
+
+draw() {
+  local cols rows state meta updated usage dur err err_at line1 line2 avail body title
+  cols="$(tput cols)"; rows="$(tput lines)"
+  state="$(cat "$dir/state" 2>/dev/null || echo idle)"
+  meta="$(cat "$dir/meta.json" 2>/dev/null || echo '{}')"
+  updated="$(jq -r '.updated_at // 0' <<<"$meta")"
+  dur="$(jq -r '(.duration_ms // 0) / 1000 | floor' <<<"$meta")"
+  usage="$(jq -r '
+    def fmt: if . >= 999500 then "\(. / 100000 | round / 10)M"
+             elif . >= 1000 then "\(. / 1000 | round)k" else tostring end;
+    "\(.tokens_in // 0 | fmt) in (\(if (.tokens_in // 0) > 0 then (.tokens_cached // 0) * 100 / .tokens_in | floor else 0 end)% cached) · \(.tokens_out // 0 | fmt) out · total \(.total_tokens // 0 | fmt)"
+  ' <<<"$meta")"
+  err="$(jq -r '.error // empty' <<<"$meta")"
+  err_at="$(jq -r '.error_at // 0' <<<"$meta")"
+
+  if [ "$updated" -gt 0 ]; then
+    line2="updated $(ago "$updated") · ${dur}s · $usage"
+  else
+    line2="no status yet"
+  fi
+  case "$state" in
+    running) state=$'\e[33m● refreshing\e[0m' ;;
+    waiting) state=$'\e[36m◔ queued\e[0m' ;;
+    stale) state=$'\e[2m◌ stale · '"$(cat "$dir/behind" 2>/dev/null || echo 1)"$' behind\e[0m' ;;
+    capped) state=$'\e[35m⏸ capped\e[0m' ;;
+    *) state=$'\e[32m✓ idle\e[0m' ;;
+  esac
+
+  avail=$((rows - 3))
+  # status-refresh reads this to give the fork its line budget.
+  printf '%s %s\n' "$cols" "$avail" > "$dir/size"
+  if [ -n "$err" ] && [ "$err_at" -ge "$updated" ]; then
+    err="$(printf '%s' "${err:0:$((cols * 2))}" | fold -w "$cols")"
+    avail=$((avail - $(printf '%s\n' "$err" | wc -l)))
+  else
+    err=""
+  fi
+  [ "$avail" -lt 1 ] && avail=1
+
+  body="$(if [ -s "$dir/status.md" ]; then
+    render "$cols" "$dir/status.md" "$avail"
+  else
+    echo "Waiting for the first status. It arrives when the next turn ends, or press r."
+  fi)"
+  body_lines="$(printf '%s\n' "$body" | wc -l)"
+
+  title="$(sed -nE '0,/^[*_ ]*[Ss]ummary[*_ ]*:[*_ ]*/s///p' "$dir/status.md" 2>/dev/null | head -1)"
+  title="${title:-status · $target}"
+  # The state label is 12 columns wide.
+  [ "${#title}" -gt $((cols - 14)) ] && title="${title:0:$((cols - 15))}…"
+  line2="$line2 · r a q"
+  [ "${#line2}" -gt "$cols" ] && line2="${line2% · r a q}"
+
+  printf '\e[H\e[2J'
+  printf '\e[1m%s\e[0m  %s\n' "$title" "$state"
+  printf '\e[2m%s\e[0m\n' "$line2"
+  [ -n "$err" ] && printf '\e[31m%s\e[0m\n' "$err"
+  printf '\e[2m%s\e[0m\n' "$(printf '%*s' "$cols" '' | tr ' ' '-')"
+  printf '%s\n' "$body" | tail -n +"$((offset + 1))" | head -n "$avail"
+}
+
+signature() {
+  stat -c '%Y' "$dir/status.md" "$dir/meta.json" "$dir/state" "$dir/behind" 2>/dev/null | tr '\n' ' '
+  tput cols; tput lines
+  echo $(( $(date +%s) / 30 ))
+}
+
+refresh
+last_sig=""
+tick=0
+while :; do
+  # A refresh skipped while the pane was hidden, locked or capped runs once the gate opens.
+  tick=$((tick + 1))
+  if [ $((tick % 5)) -eq 0 ] && [ -e "$dir/pending" ] && flock -n "$dir/lock" true; then
+    refresh
+  fi
+  sig="$(signature)"
+  if [ "$sig" != "$last_sig" ]; then
+    draw
+    last_sig="$sig"
+  fi
+  key=""
+  IFS= read -rsn1 -t 1 key || true
+  case "$key" in
+    q) exit 0 ;;
+    r) refresh --force; last_sig="" ;;
+    j) [ "$offset" -lt "$((body_lines - 1))" ] && offset=$((offset + 1)); last_sig="" ;;
+    k) [ "$offset" -gt 0 ] && offset=$((offset - 1)); last_sig="" ;;
+    g) offset=0; last_sig="" ;;
+    a) show_all=$((1 - show_all)); offset=0; last_sig="" ;;
+  esac
+done

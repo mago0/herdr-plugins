@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Toggles the status pane for a Claude Code pane.
+# Usage: open-status-pane [agent_pane_id]   (default: the focused/calling pane)
+set -uo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$here/lib.sh"
+
+target="${1:-${HERDR_PANE_ID:-}}"
+[ -n "$target" ] || { echo "no pane id: pass one or run inside herdr" >&2; exit 1; }
+
+# Invoked from a viewer pane: close that viewer.
+for d in "$STATE_ROOT"/*/; do
+  if [ "$(cat "$d/viewer_pane" 2>/dev/null)" = "$target" ] && viewer_alive "${d%/}"; then
+    exec "$HERDR_BIN" pane close "$target"
+  fi
+done
+
+dir="$(pane_dir "$target")"
+if viewer_alive "$dir"; then
+  viewer="$(cat "$dir/viewer_pane" 2>/dev/null)"
+  if [ -n "$viewer" ]; then
+    exec "$HERDR_BIN" pane close "$viewer"
+  fi
+  kill "$(cat "$dir/enabled")" 2>/dev/null
+  exit 0
+fi
+
+opened="$("$HERDR_BIN" plugin pane open \
+  --plugin herdr-status-pane \
+  --entrypoint status \
+  --placement split \
+  --direction right \
+  --target-pane "$target" \
+  --env "HERDR_STATUS_TARGET=$target" \
+  --no-focus)" || exit 1
+viewer="$(jq -r '.result.plugin_pane.pane.pane_id // empty' <<<"$opened")"
+# Splits open 50/50; this narrows the viewer to about 40% of the tab.
+[ -n "$viewer" ] && "$HERDR_BIN" pane resize --pane "$viewer" --direction right \
+  --amount "${HERDR_STATUS_SHRINK:-0.1}" > /dev/null
+printf '%s\n' "$opened"

@@ -2,7 +2,8 @@
 # Supervisor front-end for Herdr dispatch: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
-#   dispatch.sh run     [--name <slug>]                         bind (create or resume) a run; later commands default to it
+#   dispatch.sh run     [--name <slug>] [--wake <types>]        bind (create or resume) a run; later commands default to it
+#                       --wake: mail types that wake the supervisor (default question,escalation,worker_done)
 #   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
 #                       [--kind <herdr kind>] [--base <ref>] [--tab] [--after <dispatch>]... [-- <agent args>]
 #                       --tab: new tab in the caller's workspace instead of a workspace of its own
@@ -204,14 +205,16 @@ release_tab_worker() {
 
 case "$CMD" in
   run)
-    NAME=
-    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    NAME= WAKE=
+    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    case ",$WAKE," in *[!a-z_,]*) die "run: --wake takes a comma-separated list of mail types" ;; esac
     RUN=${NAME:-run-$(date +%Y%m%d-%H%M%S)}
     RUN=$(printf '%s' "$RUN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')
     RUN_DIR="$RUNS/$RUN"; mkdir -p "$RUN_DIR/workers" "$STATE"
     [ -f "$RUN_DIR/ledger.json" ] || echo '[]' >"$RUN_DIR/ledger.json"
     touch "$RUN_DIR/inbox.jsonl"
     echo "$RUN" >"$POINTER"
+    [ -z "$WAKE" ] || echo "$WAKE" >"$RUN_DIR/wake-types"
     if [ -n "${HERDR_PANE_ID:-}" ]; then
       echo "$HERDR_PANE_ID" >"$RUN_DIR/supervisor"
       index_mod --arg p "$HERDR_PANE_ID" --arg r "$RUN" '.[$p] = {run: $r, role: "supervisor", pending: false}'
@@ -411,7 +414,7 @@ case "$CMD" in
       ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
     echo "$SENT"
     [ "$TYPE" != worker_done ] || unindex_worker "$FROM"
-    case "$TYPE" in question|escalation|worker_done)
+    case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
       ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '\n|' '  ' | cut -c1-160)
       notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
         "dispatch: $TYPE from $FROM" "$SHORT" ;;

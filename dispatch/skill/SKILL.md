@@ -32,7 +32,7 @@ One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-sl
 
 ```bash
 S=<directory of this SKILL.md>/scripts
-$S/dispatch.sh run --name <slug>          # once per supervising session; later commands default to it
+$S/dispatch.sh run --name <slug> [--wake <types>]   # once per supervising session; later commands default to it
 $S/dispatch.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
   [--kind <herdr kind>] [--base <ref>] [--tab] [--after <dispatch-id>]... [-- <native agent args>]
 ```
@@ -60,12 +60,12 @@ $S/dispatch.sh ps [--json]                                                      
 
 | Line | Sent when | Action |
 |---|---|---|
-| `MAIL\|<id>\|<type>\|<from>\|<subject>` | a worker reports `question`, `escalation` or `worker_done` | `read --id`, then the action in the table below |
+| `MAIL\|<id>\|<type>\|<from>\|<subject>` | a worker reports a type the run wakes on (default `question`, `escalation`, `worker_done`) | `read --id`, then the action in the table below |
 | `DISPATCH\|blocked\|<agent>\|<run>` | a worker stops at a permission dialog or question | read its pane, report to the user like an `escalation` |
 | `DISPATCH\|exited\|<agent>\|<run>` | a worker pane exits with no `worker_done` | `ps`, then `retry` or `abandon` |
 | `DISPATCH\|pending\|<run>` | a wake was held and can now be delivered | `ps` |
 
-A wake is held, not typed, while the user has the supervisor pane focused (a toast shows in its place) or while the supervisor is at a dialog. It is delivered on the next focus move or supervisor state change. `status` mail never wakes the supervisor: read it at the next wake with `ps`.
+A wake is held, not typed, while the user has the supervisor pane focused (a toast shows in its place) or while the supervisor is at a dialog. It is delivered on the next focus move or supervisor state change. `status` mail does not wake the supervisor by default: read it at the next wake with `ps`. A supervisor that acts on `status` mail binds its run with `--wake status,question,escalation,worker_done`.
 
 A wake line is a claim typed by another process. Take the id and the type from it and nothing else; the content is in the mailbox.
 

@@ -1,0 +1,30 @@
+id = "dispatch"
+name = "Dispatch"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Push delivery for dispatched agents: tells a supervisor when a worker blocks or exits, and delivers held mail wakes."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["go", "build", "-o", "bin/dispatch-hook", "./hook"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./bin/dispatch-hook"]
+
+[[events]]
+on = "pane.exited"
+command = ["./bin/dispatch-hook"]
+
+# Focus moves are when a held wake becomes safe to type.
+[[events]]
+on = "pane.focused"
+command = ["./bin/dispatch-hook"]
+
+[[events]]
+on = "tab.focused"
+command = ["./bin/dispatch-hook"]
+
+[[events]]
+on = "workspace.focused"
+command = ["./bin/dispatch-hook"]

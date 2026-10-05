@@ -47,7 +47,7 @@ The fork runs with `HERDR_*` and `ORCA_*` variables removed, so its own hooks ca
 ## Install
 
 ```sh
-herdr plugin install mago0/herdr-status-pane
+herdr plugin install mago0/herdr-plugins/status-pane
 root="$(herdr plugin list --plugin herdr-status-pane --json | jq -r '.result.plugins[0].plugin_root')"
 ```
 

@@ -425,5 +425,27 @@ case "$CMD" in
     [ -n "$TO" ] || TO=$(supervisor)
     index_mod --arg p "$PANE" --arg r "$RUN" --arg a "$NAME" --arg s "$TO" '.[$p] = {run: $r, role: "tracked", agent: $a, supervisor: $s}'
     ;;
+
+  report)
+    bind_run
+    FROM= TYPE= SUBJ= BODY= BODY_FILE= OUTCOME=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;; --subject) SUBJ=$2; shift 2 ;;
+        --body) BODY=$2; shift 2 ;; --body-file) BODY_FILE=$2; shift 2 ;; --outcome) OUTCOME=$2; shift 2 ;;
+        *) die "report: unknown option $1" ;;
+      esac
+    done
+    case "$TYPE" in status|question|escalation|worker_done) ;; *) die "report: --type must be status|question|escalation|worker_done" ;; esac
+    SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
+      ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
+    echo "$SENT"
+    [ "$TYPE" != worker_done ] || unindex_worker "$FROM"
+    case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
+      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '\n|' '  ' | cut -c1-160)
+      notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
+        "dispatch: $TYPE from $FROM" "$SHORT" ;;
+    esac
+    ;;
   *) die "unknown command $CMD" ;;
 esac

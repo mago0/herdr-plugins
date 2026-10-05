@@ -138,7 +138,7 @@ func main() {
 	}
 	kind := os.Getenv("HERDR_PLUGIN_EVENT")
 	switch kind {
-	case "pane.focused", "tab.focused", "workspace.focused":
+	case "pane.focused":
 		for pane, e := range idx {
 			if e.Role == "supervisor" && e.Pending {
 				flush(pane, e)
@@ -156,7 +156,7 @@ func main() {
 	if !ok {
 		return
 	}
-	exited := kind == "pane.exited"
+	exited := kind == "pane.exited" || kind == "pane.closed"
 	if exited {
 		update(func(idx map[string]entry) { delete(idx, pane) })
 	}

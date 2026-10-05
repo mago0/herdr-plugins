@@ -131,7 +131,7 @@ launch_dispatch() {
   local aargs=(); while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]?' <<<"$spec")
   [ ${#aargs[@]} -eq 0 ] || args+=(-- "${aargs[@]}")
 
-  local receipt rc=0
+  local receipt rc=0 t0; t0=$(now)
   receipt=$("$HERE/herdr-dispatch.sh" "${args[@]}") || rc=$?
   if [ -z "$receipt" ]; then
     ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .status = "failed_start" | .started = $ts else . end)'
@@ -145,7 +145,11 @@ launch_dispatch() {
           placement: ($r.placement // "workspace"), tab_id: $r.tab_id,
           workspace_id: $r.workspace_id, pane_id: $r.pane_id, worktree: $r.worktree, branch: $r.branch,
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
-  [ "$ls" != working ] || index_worker "$(jq -r .agent <<<"$receipt")"
+  # A fast worker can report worker_done before the launcher returns; do not index it again.
+  local ag; ag=$(jq -r .agent <<<"$receipt")
+  if [ "$ls" = working ] && [ -z "$(jq -c --arg a "$ag" --arg t "$t0" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$INBOX")" ]; then
+    index_worker "$ag"
+  fi
   jq -c --arg d "$D" '. + {dispatch: $d}' <<<"$receipt"
   return $rc
 }

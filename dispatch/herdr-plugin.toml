@@ -16,15 +16,11 @@ command = ["./bin/dispatch-hook"]
 on = "pane.exited"
 command = ["./bin/dispatch-hook"]
 
-# Focus moves are when a held wake becomes safe to type.
+[[events]]
+on = "pane.closed"
+command = ["./bin/dispatch-hook"]
+
+# A focus move is when a held wake becomes safe to type. Tab and workspace switches emit this too.
 [[events]]
 on = "pane.focused"
-command = ["./bin/dispatch-hook"]
-
-[[events]]
-on = "tab.focused"
-command = ["./bin/dispatch-hook"]
-
-[[events]]
-on = "workspace.focused"
 command = ["./bin/dispatch-hook"]

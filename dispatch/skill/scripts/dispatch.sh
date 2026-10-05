@@ -16,16 +16,20 @@
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list
+#   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
+#                       worker side: mail the supervisor, and wake it for question, escalation and worker_done
 #
 # Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
 # Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
 # <run>/workers/<agent>/inbox.jsonl (supervisor -> worker).
+# Pane index: <state>/agent-dispatch/panes.json, pane id -> {run, role, agent, supervisor, pending}.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 MAIL="$HERE/mail.sh"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dispatch"
 RUNS="$STATE/runs"
+INDEX="$STATE/panes.json"
 POINTER="$STATE/current-run${HERDR_PANE_ID:+.${HERDR_PANE_ID//:/_}}"
 
 die() { echo "dispatch.sh: $*" >&2; exit 1; }
@@ -64,6 +68,42 @@ deps_met() {
   [ "$(jq -r --arg d "$1" '
     (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
     | .[] | select(.dispatch == $d) | ((.after // []) | all(. as $a | $ok | any(. == $a)))' "$LEDGER")" = true ]
+}
+
+# index_mod [jq args...] '<filter over the object>'  -- atomic read-modify-write of the pane index.
+index_mod() {
+  mkdir -p "$STATE"
+  ( flock 9
+    [ -s "$INDEX" ] || echo '{}' >"$INDEX"
+    TMP=$(mktemp "$INDEX.XXXXXX"); jq "$@" "$INDEX" >"$TMP" && mv "$TMP" "$INDEX"
+  ) 9>"$INDEX.lock"
+}
+index_worker() {  # <agent>: (re)index the pane that hosts a worker of this run
+  local pane; pane=$(herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
+  [ -n "$pane" ] || return 0
+  index_mod --arg p "$pane" --arg r "$RUN" --arg a "$1" --arg s "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" \
+    '.[$p] = {run: $r, role: "worker", agent: $a, supervisor: $s}'
+}
+unindex_worker() {  # <agent>
+  index_mod --arg r "$RUN" --arg a "$1" 'with_entries(select((.value.role == "worker" and .value.run == $r and .value.agent == $a) | not))'
+}
+set_pending() {  # <supervisor pane> <true|false>
+  index_mod --arg p "$1" --argjson v "$2" 'if .[$p] then .[$p].pending = $v else . end'
+}
+
+# Wake the supervisor with one prompt line. A focused pane may hold a half-typed draft and a
+# blocked or unknown one may hold a dialog, so those get a toast or nothing, and a pending mark.
+notify_supervisor() {  # <prompt line> <toast title> <toast body>
+  local sup info
+  sup=$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)
+  [ -n "$sup" ] || return 0
+  info=$(herdr agent get "$sup" 2>/dev/null) || { echo "dispatch.sh: note: no agent in supervisor pane $sup; the message is in its inbox" >&2; return 0; }
+  if [ "$(jq -r '.result.agent.focused // false' <<<"$info")" = true ]; then
+    herdr notification show "$2" --body "$3" --sound request >/dev/null 2>&1 || true
+    set_pending "$sup" true; return 0
+  fi
+  case "$(jq -r '.result.agent.agent_status // "unknown"' <<<"$info")" in blocked|unknown) set_pending "$sup" true; return 0 ;; esac
+  herdr agent prompt "$sup" "$1" >/dev/null 2>&1 || set_pending "$sup" true
 }
 
 nudge() {
@@ -118,6 +158,7 @@ launch_dispatch() {
           placement: ($r.placement // "workspace"), tab_id: $r.tab_id,
           workspace_id: $r.workspace_id, pane_id: $r.pane_id, worktree: $r.worktree, branch: $r.branch,
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
+  [ "$ls" != working ] || index_worker "$(jq -r .agent <<<"$receipt")"
   jq -c --arg d "$D" '. + {dispatch: $d}' <<<"$receipt"
   return $rc
 }
@@ -133,6 +174,7 @@ launch_ready() {
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
 release_worker() {
   local agent=$1 D=$2 ws out
+  unindex_worker "$agent"
   if [ "$(entry "$D" | jq -r '.placement // "workspace"')" = tab ]; then release_tab_worker "$agent" "$D"; return 0; fi
   ws=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.workspace_id // empty' || true)
   [ -n "$ws" ] || ws=$(entry "$D" | jq -r '.workspace_id // empty')
@@ -179,6 +221,10 @@ case "$CMD" in
     [ -f "$RUN_DIR/ledger.json" ] || echo '[]' >"$RUN_DIR/ledger.json"
     touch "$RUN_DIR/inbox.jsonl"
     echo "$RUN" >"$POINTER"
+    if [ -n "${HERDR_PANE_ID:-}" ]; then
+      echo "$HERDR_PANE_ID" >"$RUN_DIR/supervisor"
+      index_mod --arg p "$HERDR_PANE_ID" --arg r "$RUN" '.[$p] = {run: $r, role: "supervisor", pending: false}'
+    fi
     jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}'
     ;;
 
@@ -273,6 +319,7 @@ case "$CMD" in
     [ -n "$AGENT" ] && [ -n "$SUBJ" ] && { [ -n "$BODY" ] || [ -n "$BODY_FILE" ]; } || die "send needs --agent, --subject and --body or --body-file"
     WI="$RUN_DIR/workers/$AGENT/inbox.jsonl"
     "$MAIL" send --inbox "$WI" --from supervisor --type followup --subject "$SUBJ" ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"}
+    index_worker "$AGENT"
     nudge "$AGENT" "Your supervisor sent a follow-up. Read it: $MAIL read --inbox $WI --unacked"
     ;;
 
@@ -280,6 +327,7 @@ case "$CMD" in
     bind_run
     JSON=0; while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
     sweep_heartbeats
+    [ -z "${HERDR_PANE_ID:-}" ] || set_pending "$HERDR_PANE_ID" false
     UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
     LASTSEEN=$(jq -sc 'group_by(.from) | map({key: .[0].from, value: (map(.ts) | max)}) | from_entries' "$INBOX")
     AS='{}'
@@ -354,6 +402,7 @@ case "$CMD" in
     AGENT=$(jq -r '.agent // empty' <<<"$E")
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
     ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" 'map(if .dispatch == $d then .status = $s | .settled = $ts else . end)'
+    [ -z "$AGENT" ] || unindex_worker "$AGENT"
     [ "$CMD" != stop ] || [ -z "$AGENT" ] || release_worker "$AGENT" "$D"
     jq -cn --arg d "$D" --arg s "$NEWST" '{dispatch: $d, status: $s}'
     ;;
@@ -364,5 +413,27 @@ case "$CMD" in
     E=$(entry "$D"); [ -n "$E" ] || die "no dispatch $D in run $RUN"; jq . <<<"$E"
     ;;
   list) bind_run; jq . "$LEDGER" ;;
+
+  report)
+    bind_run
+    FROM= TYPE= SUBJ= BODY= BODY_FILE= OUTCOME=
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;; --subject) SUBJ=$2; shift 2 ;;
+        --body) BODY=$2; shift 2 ;; --body-file) BODY_FILE=$2; shift 2 ;; --outcome) OUTCOME=$2; shift 2 ;;
+        *) die "report: unknown option $1" ;;
+      esac
+    done
+    case "$TYPE" in status|question|escalation|worker_done|heartbeat) ;; *) die "report: --type must be status|question|escalation|worker_done|heartbeat" ;; esac
+    SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
+      ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
+    echo "$SENT"
+    [ "$TYPE" != worker_done ] || unindex_worker "$FROM"
+    case "$TYPE" in question|escalation|worker_done)
+      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '\n|' '  ' | cut -c1-160)
+      notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
+        "dispatch: $TYPE from $FROM" "$SHORT" ;;
+    esac
+    ;;
   *) die "unknown command $CMD" ;;
 esac

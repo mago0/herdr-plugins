@@ -119,6 +119,7 @@ fi
 
 PROMPT=$(cat "$PROMPT_FILE")
 MAIL="$(cd "$(dirname "$0")" && pwd)/mail.sh"
+DISPATCH="$(dirname "$MAIL")/dispatch.sh"
 WORKER_INBOX=
 if [ -n "$RUN_DIR" ]; then
   INBOX="$RUN_DIR/inbox.jsonl"
@@ -131,7 +132,7 @@ if [ -n "$RUN_DIR" ]; then
 
 You are dispatched agent \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
 
-    $MAIL send --inbox $INBOX --from $NAME --type <type> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
+    $DISPATCH report --run $(basename "$RUN_DIR") --from $NAME --type <type> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
 
 Types:
 - \`status\` - progress or a result; you keep working.

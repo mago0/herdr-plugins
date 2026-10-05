@@ -20,6 +20,15 @@ command = ["./bin/dispatch-hook"]
 on = "pane.closed"
 command = ["./bin/dispatch-hook"]
 
+# A closed tab or workspace takes its panes with it and emits no pane event.
+[[events]]
+on = "tab.closed"
+command = ["./bin/dispatch-hook"]
+
+[[events]]
+on = "workspace.closed"
+command = ["./bin/dispatch-hook"]
+
 # A focus move is when a held wake becomes safe to type. Tab and workspace switches emit this too.
 [[events]]
 on = "pane.focused"

@@ -18,7 +18,9 @@
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list
 #   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
-#                       worker side: mail the supervisor, and wake it for question, escalation and worker_done
+#                       worker side: mail the supervisor, and wake it for the run's wake types
+#   dispatch.sh notify  --line <text> [--title <toast title>]   wake the supervisor with one line from any process; exit 3 = held
+#   dispatch.sh track   --pane <id> --name <label>              report this pane to the supervisor if it exits or closes
 #
 # Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
 # Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
@@ -92,19 +94,23 @@ set_pending() {  # <supervisor pane> <true|false>
   index_mod --arg p "$1" --argjson v "$2" 'if .[$p] then .[$p].pending = $v else . end'
 }
 
-# Wake the supervisor with one prompt line. A focused pane may hold a half-typed draft and a
-# blocked or unknown one may hold a dialog, so those get a toast or nothing, and a pending mark.
-notify_supervisor() {  # <prompt line> <toast title> <toast body>
+# Type one line into the supervisor pane when that is safe. A focused pane may hold a half-typed
+# draft and a blocked or unknown one may hold a dialog: those get a toast or nothing, and status 1.
+deliver() {  # <prompt line> <toast title> <toast body>
   local sup info
   sup=$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)
-  [ -n "$sup" ] || return 0
-  info=$(herdr agent get "$sup" 2>/dev/null) || { set_pending "$sup" true; return 0; }
+  [ -n "$sup" ] || return 1
+  info=$(herdr agent get "$sup" 2>/dev/null) || return 1
   if [ "$(jq -r '.result.agent.focused // false' <<<"$info")" = true ]; then
     herdr notification show "$2" --body "$3" --sound request >/dev/null 2>&1 || true
-    set_pending "$sup" true; return 0
+    return 1
   fi
-  case "$(jq -r '.result.agent.agent_status // "unknown"' <<<"$info")" in blocked|unknown) set_pending "$sup" true; return 0 ;; esac
-  herdr agent prompt "$sup" "$1" >/dev/null 2>&1 || set_pending "$sup" true
+  case "$(jq -r '.result.agent.agent_status // "unknown"' <<<"$info")" in blocked|unknown) return 1 ;; esac
+  herdr agent prompt "$sup" "$1" >/dev/null 2>&1
+}
+# Mail wake: a held line is marked pending, and the plugin's hook delivers it later.
+notify_supervisor() {
+  deliver "$@" || set_pending "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" true
 }
 
 nudge() {
@@ -398,6 +404,24 @@ case "$CMD" in
     E=$(entry "$D"); [ -n "$E" ] || die "no dispatch $D in run $RUN"; jq . <<<"$E"
     ;;
   list) bind_run; jq . "$LEDGER" ;;
+
+  notify)
+    bind_run
+    LINE= TITLE=
+    while [ $# -gt 0 ]; do case "$1" in --line) LINE=$2; shift 2 ;; --title) TITLE=$2; shift 2 ;; *) die "notify: unknown option $1" ;; esac; done
+    [ -n "$LINE" ] || die "notify needs --line"
+    LINE=$(printf '%s' "$LINE" | tr '\n' ' ' | cut -c1-400)
+    deliver "$LINE" "${TITLE:-dispatch: wake held}" "$LINE" || exit 3
+    ;;
+
+  track)
+    bind_run
+    PANE= NAME=
+    while [ $# -gt 0 ]; do case "$1" in --pane) PANE=$2; shift 2 ;; --name) NAME=$2; shift 2 ;; *) die "track: unknown option $1" ;; esac; done
+    [ -n "$PANE" ] && [ -n "$NAME" ] || die "track needs --pane and --name"
+    index_mod --arg p "$PANE" --arg r "$RUN" --arg a "$NAME" --arg s "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" \
+      '.[$p] = {run: $r, role: "worker", agent: $a, supervisor: $s}'
+    ;;
 
   report)
     bind_run

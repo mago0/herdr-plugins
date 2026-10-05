@@ -13,6 +13,8 @@ The plugin has two parts that version together:
 - For `question`, `escalation` and `worker_done` (and `status`, when the run is bound with `--wake`), the supervisor is woken by one line typed into its pane with `herdr agent prompt`: `MAIL|<id>|<type>|<from>|<subject>`. No watcher process is needed.
 - The hook tells the supervisor when a worker stops at a dialog (`DISPATCH|blocked|...`) or its pane goes away with no `worker_done` (`DISPATCH|exited|...`).
 - A wake is never typed into a pane the user has focused, because it would be appended to a half-typed draft. The user gets a toast, and the wake is delivered on the next focus move or supervisor state change (`DISPATCH|pending|...`).
+- `dispatch.sh notify` and `dispatch.sh track` give any other process the same delivery, so a poll loop in a plain pane can wake the supervisor.
+- A closed tab or workspace emits no pane event, so on those the hook checks every indexed pane against `herdr pane list`.
 - `dispatch.sh ps` is the reconcile path. Herdr does not replay hook events after a restart.
 
 `docs/architecture.html` has the full sequence diagram. `skill/SKILL.md` is the reference for agents.

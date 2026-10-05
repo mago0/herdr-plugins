@@ -131,6 +131,45 @@ func flush(pane string, e entry) {
 	}
 }
 
+// gone handles an indexed pane that no longer exists: the entry is removed, and a worker's
+// supervisor is told, because a worker that had reported worker_done is no longer indexed.
+func gone(pane string, e entry) {
+	update(func(idx map[string]entry) { delete(idx, pane) })
+	if e.Role == "worker" && e.Supervisor != "" {
+		wake(e.Supervisor,
+			fmt.Sprintf("DISPATCH|exited|%s|%s - worker pane exited with no worker_done: %s ps --run %s", e.Agent, e.Run, dispatchSh(), e.Run),
+			"dispatch: "+e.Agent+" exited")
+	}
+}
+
+// sweep finds indexed panes that herdr no longer lists. A closed tab or workspace takes its
+// panes with it and emits no pane event.
+func sweep(idx map[string]entry) {
+	out, err := herdr("pane", "list")
+	if err != nil {
+		return
+	}
+	var r struct {
+		Result struct {
+			Panes []struct {
+				PaneID string `json:"pane_id"`
+			} `json:"panes"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(out, &r) != nil || len(r.Result.Panes) == 0 {
+		return
+	}
+	live := map[string]bool{}
+	for _, p := range r.Result.Panes {
+		live[p.PaneID] = true
+	}
+	for pane, e := range idx {
+		if !live[pane] {
+			gone(pane, e)
+		}
+	}
+}
+
 func main() {
 	idx := readIndex()
 	if len(idx) == 0 {
@@ -145,6 +184,9 @@ func main() {
 			}
 		}
 		return
+	case "tab.closed", "workspace.closed":
+		sweep(idx)
+		return
 	}
 
 	var ev event
@@ -156,17 +198,13 @@ func main() {
 	if !ok {
 		return
 	}
-	exited := kind == "pane.exited" || kind == "pane.closed"
-	if exited {
-		update(func(idx map[string]entry) { delete(idx, pane) })
+	if kind == "pane.exited" || kind == "pane.closed" {
+		gone(pane, e)
+		return
 	}
 	switch {
-	case e.Role == "supervisor" && !exited && e.Pending:
+	case e.Role == "supervisor" && e.Pending:
 		flush(pane, e)
-	case e.Role == "worker" && e.Supervisor != "" && exited:
-		wake(e.Supervisor,
-			fmt.Sprintf("DISPATCH|exited|%s|%s - worker pane exited with no worker_done: %s ps --run %s", e.Agent, e.Run, dispatchSh(), e.Run),
-			"dispatch: "+e.Agent+" exited")
 	case e.Role == "worker" && e.Supervisor != "" && ev.Data.AgentStatus == "blocked":
 		wake(e.Supervisor,
 			fmt.Sprintf("DISPATCH|blocked|%s|%s - worker is waiting at a dialog: herdr agent read %s --source recent-unwrapped --lines 120", e.Agent, e.Run, e.Agent),

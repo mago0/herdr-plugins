@@ -97,7 +97,7 @@ notify_supervisor() {  # <prompt line> <toast title> <toast body>
   local sup info
   sup=$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)
   [ -n "$sup" ] || return 0
-  info=$(herdr agent get "$sup" 2>/dev/null) || { echo "dispatch.sh: note: no agent in supervisor pane $sup; the message is in its inbox" >&2; return 0; }
+  info=$(herdr agent get "$sup" 2>/dev/null) || { set_pending "$sup" true; return 0; }
   if [ "$(jq -r '.result.agent.focused // false' <<<"$info")" = true ]; then
     herdr notification show "$2" --body "$3" --sound request >/dev/null 2>&1 || true
     set_pending "$sup" true; return 0

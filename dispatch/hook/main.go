@@ -135,9 +135,17 @@ func flush(pane string, e entry) {
 // supervisor is told, because a worker that had reported worker_done is no longer indexed.
 func gone(pane string, e entry) {
 	update(func(idx map[string]entry) { delete(idx, pane) })
-	if e.Role == "worker" && e.Supervisor != "" {
+	if e.Supervisor == "" {
+		return
+	}
+	switch e.Role {
+	case "worker":
 		wake(e.Supervisor,
 			fmt.Sprintf("DISPATCH|exited|%s|%s - worker pane exited with no worker_done: %s ps --run %s", e.Agent, e.Run, dispatchSh(), e.Run),
+			"dispatch: "+e.Agent+" exited")
+	case "tracked":
+		wake(e.Supervisor,
+			fmt.Sprintf("DISPATCH|exited|%s|%s - tracked pane is gone", e.Agent, e.Run),
 			"dispatch: "+e.Agent+" exited")
 	}
 }

@@ -19,8 +19,10 @@
 #   dispatch.sh show    --dispatch <d> | list
 #   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
 #                       worker side: mail the supervisor, and wake it for the run's wake types
-#   dispatch.sh notify  --line <text> [--title <toast title>]   wake the supervisor with one line from any process; exit 3 = held
-#   dispatch.sh track   --pane <id> --name <label>              report this pane to the supervisor if it exits or closes
+#   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
+#                       type one line into the supervisor (or --to) from any process; exit 3 = held
+#   dispatch.sh track   --pane <id> --name <label> [--notify <agent|pane>]
+#                       tell the supervisor (or --notify) if this pane exits or closes
 #
 # Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
 # Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
@@ -41,7 +43,7 @@ new_id() { echo "d_$(date +%Y%m%d%H%M%S)_$RANDOM"; }
 for bin in jq herdr flock; do command -v "$bin" >/dev/null || die "$bin not on PATH"; done
 
 CMD=${1:-}; shift || true
-[ -n "$CMD" ] || { sed -n '2,20p' "$0" >&2; exit 2; }
+[ -n "$CMD" ] || { sed -n '2,/^set -euo pipefail/{/^set -euo pipefail/!p}' "$0" >&2; exit 2; }
 
 # --run may appear anywhere; strip it before per-command parsing.
 RUN=${DISPATCH_RUN:-}
@@ -94,23 +96,24 @@ set_pending() {  # <supervisor pane> <true|false>
   index_mod --arg p "$1" --argjson v "$2" 'if .[$p] then .[$p].pending = $v else . end'
 }
 
-# Type one line into the supervisor pane when that is safe. A focused pane may hold a half-typed
+# Type one line into an agent's pane when that is safe. A focused pane may hold a half-typed
 # draft and a blocked or unknown one may hold a dialog: those get a toast or nothing, and status 1.
-deliver() {  # <prompt line> <toast title> <toast body>
-  local sup info
-  sup=$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)
-  [ -n "$sup" ] || return 1
-  info=$(herdr agent get "$sup" 2>/dev/null) || return 1
+deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
+  local info
+  [ -n "$1" ] || return 1
+  info=$(herdr agent get "$1" 2>/dev/null) || return 1
   if [ "$(jq -r '.result.agent.focused // false' <<<"$info")" = true ]; then
-    herdr notification show "$2" --body "$3" --sound request >/dev/null 2>&1 || true
+    herdr notification show "$3" --body "$4" --sound request >/dev/null 2>&1 || true
     return 1
   fi
   case "$(jq -r '.result.agent.agent_status // "unknown"' <<<"$info")" in blocked|unknown) return 1 ;; esac
-  herdr agent prompt "$sup" "$1" >/dev/null 2>&1
+  herdr agent prompt "$1" "$2" >/dev/null 2>&1
 }
+supervisor() { cat "$RUN_DIR/supervisor" 2>/dev/null || true; }
 # Mail wake: a held line is marked pending, and the plugin's hook delivers it later.
-notify_supervisor() {
-  deliver "$@" || set_pending "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" true
+notify_supervisor() {  # <prompt line> <toast title> <toast body>
+  local sup; sup=$(supervisor)
+  deliver "$sup" "$@" || set_pending "$sup" true
 }
 
 nudge() {
@@ -406,43 +409,21 @@ case "$CMD" in
   list) bind_run; jq . "$LEDGER" ;;
 
   notify)
-    bind_run
-    LINE= TITLE=
-    while [ $# -gt 0 ]; do case "$1" in --line) LINE=$2; shift 2 ;; --title) TITLE=$2; shift 2 ;; *) die "notify: unknown option $1" ;; esac; done
+    LINE= TITLE= TO=
+    while [ $# -gt 0 ]; do case "$1" in --line) LINE=$2; shift 2 ;; --title) TITLE=$2; shift 2 ;; --to) TO=$2; shift 2 ;; *) die "notify: unknown option $1" ;; esac; done
     [ -n "$LINE" ] || die "notify needs --line"
+    [ -n "$TO" ] || { bind_run; TO=$(supervisor); }
     LINE=$(printf '%s' "$LINE" | tr '\n' ' ' | cut -c1-400)
-    deliver "$LINE" "${TITLE:-dispatch: wake held}" "$LINE" || exit 3
+    deliver "$TO" "$LINE" "${TITLE:-dispatch: wake held}" "$LINE" || exit 3
     ;;
 
   track)
     bind_run
-    PANE= NAME=
-    while [ $# -gt 0 ]; do case "$1" in --pane) PANE=$2; shift 2 ;; --name) NAME=$2; shift 2 ;; *) die "track: unknown option $1" ;; esac; done
+    PANE= NAME= TO=
+    while [ $# -gt 0 ]; do case "$1" in --pane) PANE=$2; shift 2 ;; --name) NAME=$2; shift 2 ;; --notify) TO=$2; shift 2 ;; *) die "track: unknown option $1" ;; esac; done
     [ -n "$PANE" ] && [ -n "$NAME" ] || die "track needs --pane and --name"
-    index_mod --arg p "$PANE" --arg r "$RUN" --arg a "$NAME" --arg s "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" \
-      '.[$p] = {run: $r, role: "worker", agent: $a, supervisor: $s}'
-    ;;
-
-  report)
-    bind_run
-    FROM= TYPE= SUBJ= BODY= BODY_FILE= OUTCOME=
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;; --subject) SUBJ=$2; shift 2 ;;
-        --body) BODY=$2; shift 2 ;; --body-file) BODY_FILE=$2; shift 2 ;; --outcome) OUTCOME=$2; shift 2 ;;
-        *) die "report: unknown option $1" ;;
-      esac
-    done
-    case "$TYPE" in status|question|escalation|worker_done) ;; *) die "report: --type must be status|question|escalation|worker_done" ;; esac
-    SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
-      ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
-    echo "$SENT"
-    [ "$TYPE" != worker_done ] || unindex_worker "$FROM"
-    case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
-      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '\n|' '  ' | cut -c1-160)
-      notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
-        "dispatch: $TYPE from $FROM" "$SHORT" ;;
-    esac
+    [ -n "$TO" ] || TO=$(supervisor)
+    index_mod --arg p "$PANE" --arg r "$RUN" --arg a "$NAME" --arg s "$TO" '.[$p] = {run: $r, role: "tracked", agent: $a, supervisor: $s}'
     ;;
   *) die "unknown command $CMD" ;;
 esac

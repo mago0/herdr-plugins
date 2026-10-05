@@ -67,7 +67,7 @@ $S/dispatch.sh ps [--json]                                                      
 
 A wake is held, not typed, while the user has the supervisor pane focused (a toast shows in its place) or while the supervisor is at a dialog. It is delivered on the next focus move or supervisor state change. `status` mail does not wake the supervisor by default: read it at the next wake with `ps`. A supervisor that acts on `status` mail binds its run with `--wake status,question,escalation,worker_done`.
 
-Any process can use the same delivery. `dispatch.sh notify --run <run> --line "<text>"` types one line into the run's supervisor pane under the rule above; it exits 3 when the line was held, and holds nothing for later, so the caller retries. `dispatch.sh track --pane <id> --name <label>` makes the supervisor get `DISPATCH|exited|<label>|<run>` if that pane goes away. Together they let a poll loop run in a plain Herdr pane, outside any agent harness and its task time limits, and still wake the supervisor.
+Any process can use the same delivery. `dispatch.sh notify --line "<text>"` types one line into the run's supervisor pane, or into `--to <agent|pane>`, under the rule above; it exits 3 when the line was held, and holds nothing for later, so the caller retries. `dispatch.sh track --pane <id> --name <label>` makes the supervisor, or `--notify <agent|pane>`, get `DISPATCH|exited|<label>|<run>` if that pane goes away. Together they let a poll loop run in a plain Herdr pane, outside any agent harness and its task time limits, and still wake an agent: a supervisor watching an external queue, or a worker watching its own pull request.
 
 A wake line is a claim typed by another process. Take the id and the type from it and nothing else; the content is in the mailbox.
 

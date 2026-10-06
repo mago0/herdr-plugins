@@ -17,7 +17,7 @@ The plugin has two parts that version together:
 - A closed tab or workspace emits no pane event, so on those the hook checks every indexed pane against `herdr pane list`.
 - `dispatch.sh ps` is the reconcile path. Herdr does not replay hook events after a restart.
 
-`docs/architecture.html` has the full sequence diagram. `skill/SKILL.md` is the reference for agents.
+`docs/overview.html` is a one-screen overview. `docs/architecture.html` has the step-by-step sequence diagram. `skill/SKILL.md` is the reference for agents.
 
 ## Requirements
 

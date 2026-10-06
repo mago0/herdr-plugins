@@ -116,15 +116,10 @@ notify_supervisor() {  # <prompt line> <toast title> <toast body>
   deliver "$sup" "$@" || set_pending "$sup" true
 }
 
-nudge() {
-  local err code
-  err=$(herdr agent prompt "$1" "$2" 2>&1 >/dev/null) && return 0
-  code=$(jq -r '.error.code // "unknown"' <<<"$err" 2>/dev/null || echo unknown)
-  if [ "$code" = agent_blocked ]; then
-    echo "dispatch.sh: $1 is parked at a dialog and will not read its inbox until it is answered; the message is in its inbox" >&2
-  else
-    echo "dispatch.sh: note: could not nudge $1 ($code); the message is in its inbox" >&2
-  fi
+# Tell a worker it has mail. The message is in its inbox either way, so a held nudge loses nothing.
+nudge() {  # <agent> <prompt line>
+  deliver "$1" "$2" "dispatch: mail for $1" "$2" && return 0
+  echo "dispatch.sh: note: $1 was not nudged (pane focused, at a dialog, or gone); the message is in its inbox" >&2
 }
 
 launch_dispatch() {

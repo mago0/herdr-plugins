@@ -12,6 +12,11 @@ command = ["go", "build", "-o", "bin/dispatch-hook", "./hook"]
 on = "pane.agent_status_changed"
 command = ["./bin/dispatch-hook"]
 
+# A resumed worker gets its dispatch name back when herdr detects it.
+[[events]]
+on = "pane.agent_detected"
+command = ["./bin/dispatch-hook"]
+
 [[events]]
 on = "pane.exited"
 command = ["./bin/dispatch-hook"]

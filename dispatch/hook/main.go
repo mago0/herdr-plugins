@@ -178,6 +178,25 @@ func sweep(idx map[string]entry) {
 	}
 }
 
+// ensureName gives a worker's agent its dispatch name back. Herdr clears agent names when a
+// server restart resumes the agent, and the scripts address workers by name.
+func ensureName(pane, name string) {
+	out, err := herdr("agent", "get", pane)
+	if err != nil {
+		return
+	}
+	var r struct {
+		Result struct {
+			Agent struct {
+				Name string `json:"name"`
+			} `json:"agent"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(out, &r) == nil && r.Result.Agent.Name != name {
+		_, _ = herdr("agent", "rename", pane, name)
+	}
+}
+
 func main() {
 	idx := readIndex()
 	if len(idx) == 0 {
@@ -209,6 +228,9 @@ func main() {
 	if kind == "pane.exited" || kind == "pane.closed" {
 		gone(pane, e)
 		return
+	}
+	if e.Role == "worker" && e.Agent != "" {
+		ensureName(pane, e.Agent)
 	}
 	switch {
 	case e.Role == "supervisor" && e.Pending:

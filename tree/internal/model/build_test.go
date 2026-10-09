@@ -178,3 +178,54 @@ solo w
 		t.Errorf("empty input must give an empty tree, got %+v", got)
 	}
 }
+
+func TestBuildHeadsOfDifferentSupervisorsStayApart(t *testing.T) {
+	// One workspace holds a worker of each of two supervisors: each stays under its own.
+	s := Snapshot{
+		Workspaces: []Workspace{ws("w1", "a", "", 1), ws("w2", "b", "", 2), ws("w3", "shared", "api", 3)},
+		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1), tab("w3:t1", "one", 1), tab("w3:t2", "two", 2)},
+		Agents: []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", ""),
+			ag("w3:p1", "w3:t1", "x"), ag("w3:p2", "w3:t2", "y")},
+	}
+	d := Dispatch{Runs: []Run{
+		run("ra", "w1:p1", Entry{PaneID: "w3:p1", TabID: "w3:t1", WorkspaceID: "w3", Created: "1"}),
+		run("rb", "w2:p1", Entry{PaneID: "w3:p2", TabID: "w3:t2", WorkspaceID: "w3", Created: "1"}),
+	}}
+	check(t, Build(s, d), `
+a w 
+  one t api
+b w 
+  two t api
+`)
+}
+
+func TestBuildContainerCycleKeepsEveryAgent(t *testing.T) {
+	// A worker's own run reaches back into its supervisor's tab. No agent may drop out of the tree.
+	s := Snapshot{
+		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "worker", "api", 2)},
+		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1)},
+		Agents:     []Agent{ag("w1:p1", "w1:t1", "lead"), ag("w1:p2", "w1:t1", "side"), ag("w2:p1", "w2:t1", "w")},
+	}
+	d := Dispatch{Runs: []Run{
+		run("r1", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"}),
+		run("r2", "w2:p1", Entry{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Created: "1"}),
+	}}
+	seen := map[string]bool{}
+	var walk func(nodes []*Node)
+	walk = func(nodes []*Node) {
+		for _, n := range nodes {
+			seen[n.ID] = true
+			walk(n.Children)
+		}
+	}
+	got := Build(s, d)
+	walk(got.Roots)
+	for _, pane := range []string{"w1:p1", "w1:p2", "w2:p1"} {
+		if !seen[pane] {
+			t.Errorf("%s is not in the tree:\n%s", pane, outline(got))
+		}
+	}
+	if len(got.NoAgent) != 0 {
+		t.Errorf("both workspaces hold agents, got no-agent rows:\n%s", outline(got))
+	}
+}

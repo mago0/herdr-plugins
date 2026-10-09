@@ -1,6 +1,6 @@
 # tree: a supervisor tree of Herdr agents
 
-Status: design, not implemented. Date: 2026-10-09.
+Status: implemented in `tree/`. Date: 2026-10-09.
 
 ## Problem
 
@@ -75,7 +75,8 @@ The same rule applies at the tab level and at the workspace level.
 A **head** of a tab is an agent pane in that tab whose parent is not in the same tab. A head of a workspace is a tab row whose parent is not in the same workspace.
 
 - **One head.** The outer row stands for it. A tab with one agent is one row with the tab's label. A workspace with one such tab is one row with the workspace's label. No extra level.
-- **Several heads.** The outer row is a container with the outer label, and each head is a row under it. If one of the heads has a parent outside (it was dispatched), the container takes that head's place under the supervisor.
+- **Several heads.** The outer row is a container with the outer label, and each head is a row under it. When the dispatched heads all have the same supervisor, the container takes their place under that supervisor. When they have different supervisors, each dispatched head stays under its own, and the container holds only the heads nobody dispatched. A container with nothing to hold is not drawn.
+- A container must not close a loop. If it does, the node that would be its own ancestor becomes a root.
 - **No heads.** A workspace with no agent pane goes to the `No agent` group.
 
 Results in practice:

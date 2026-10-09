@@ -54,14 +54,54 @@ func Build(s Snapshot, d Dispatch) Tree {
 		}
 	}
 
-	// A container holds several heads. It takes the place of a dispatched head under its supervisor.
-	contain := func(c *Node, heads []string) {
-		nodes[c.ID] = c
+	// A container holds several heads. When its dispatched heads share one supervisor it takes their
+	// place under that supervisor; heads of different supervisors stay under their own.
+	contain := func(c *Node, heads []string) bool {
+		supervisors := map[string]bool{}
 		for _, h := range heads {
-			if p, ok := up[h]; ok && up[c.ID] == "" {
+			if p, ok := up[h]; ok {
+				supervisors[p] = true
+			}
+		}
+		shared := len(supervisors) == 1
+		var inside []string
+		for _, h := range heads {
+			if _, dispatched := up[h]; !dispatched || shared {
+				inside = append(inside, h)
+			}
+		}
+		if len(inside) == 0 {
+			return false
+		}
+		nodes[c.ID] = c
+		for _, h := range inside {
+			if p, ok := up[h]; ok {
 				up[c.ID] = p
 			}
 			up[h] = c.ID
+		}
+		return true
+	}
+	// A container can close a loop that the pane links did not have. The node that is its own
+	// ancestor becomes a root, so no row drops out of the tree.
+	unloop := func() {
+		ids := make([]string, 0, len(up))
+		for id := range up {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			seen := map[string]bool{id: true}
+			for p := up[id]; p != ""; p = up[p] {
+				if p == id {
+					delete(up, id)
+					break
+				}
+				if seen[p] {
+					break
+				}
+				seen[p] = true
+			}
 		}
 	}
 
@@ -85,32 +125,37 @@ func Build(s Snapshot, d Dispatch) Tree {
 			n.Label, n.Shown = t.Label, KindTab
 			tabRow[t.ID] = n.ID
 		case len(heads) > 1:
-			contain(&Node{
+			if contain(&Node{
 				ID: t.ID, Focus: KindTab, Shown: KindTab, TabID: t.ID, WorkspaceID: t.WorkspaceID,
 				Label: t.Label, Status: t.Status, Repo: nodes[heads[0]].Repo,
 				order: [3]int{w.Number, t.Number, -1},
-			}, heads)
-			tabRow[t.ID] = t.ID
+			}, heads) {
+				tabRow[t.ID] = t.ID
+			}
 		}
+	}
+	unloop()
+
+	occupied := map[string]bool{}
+	for _, a := range visible {
+		occupied[a.WorkspaceID] = true
 	}
 
 	// Workspace rows: the same rule over the tab rows.
 	for _, w := range workspaces {
 		var heads []string
-		any := false
 		for _, t := range tabs {
 			id, ok := tabRow[t.ID]
 			if t.WorkspaceID != w.ID || !ok {
 				continue
 			}
-			any = true
 			if p, ok := nodes[up[id]]; ok && p.WorkspaceID == w.ID {
 				continue
 			}
 			heads = append(heads, id)
 		}
 		switch {
-		case !any:
+		case !occupied[w.ID]:
 			tree.NoAgent = append(tree.NoAgent, &Node{
 				ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
 				Label: w.Label, Status: w.Status, Repo: w.Repo,
@@ -126,6 +171,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 			}, heads)
 		}
 	}
+	unloop()
 
 	less := func(a, b *Node) bool {
 		for i := range a.order {

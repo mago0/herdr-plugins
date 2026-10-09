@@ -115,3 +115,15 @@ test/smoke.sh
 ```
 
 Runs every `dispatch.sh` command that needs no live agent against a throwaway state directory.
+
+## State read by other plugins
+
+The [tree](../tree/) plugin reads the state below and writes none of it. Treat a change to these names as a breaking change.
+
+| File | Fields |
+|---|---|
+| `runs/<run>/supervisor` | the supervisor pane id |
+| `runs/<run>/ledger.json` | `pane_id`, `tab_id`, `workspace_id`, `worktree`, `created` |
+| `panes.json` | `role` (the value `tracked`) |
+
+It also reads the run directory's name for an issue key.

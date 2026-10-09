@@ -30,7 +30,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 			tree.Hidden = append(tree.Hidden, &Node{
 				ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 				Label: AgentLabel(a), Status: a.Status, Repo: wsByID[a.WorkspaceID].Repo,
-				Where: a.Where, Worktree: a.Worktree,
+				Where: a.Where, Worktree: a.Worktree, Tag: a.Tag,
 			})
 			continue
 		}
@@ -48,7 +48,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 			Label: AgentLabel(a), Status: a.Status, Repo: repo, Ticket: l.ticket[a.PaneID],
-			Where: a.Where, Worktree: a.Worktree,
+			Where: a.Where, Worktree: a.Worktree, Tag: a.Tag,
 			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
 		}
 		if p := l.parent[a.PaneID]; p != "" {

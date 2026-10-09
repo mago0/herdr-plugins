@@ -32,6 +32,8 @@ type Agent struct {
 	// Where and Worktree are those of the checkout that holds the agent's working directory.
 	Where    string
 	Worktree bool
+	// Tag is the text of the pane's label token, such as a ticket key.
+	Tag string
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -79,6 +81,8 @@ type Node struct {
 	// Where says where the row's agent works, and Worktree is true for a linked Git worktree.
 	Where    string
 	Worktree bool
+	// Tag is the label a user or agent set on the row's pane. It is drawn at the right edge.
+	Tag      string
 	Children []*Node
 	order    [3]int
 }

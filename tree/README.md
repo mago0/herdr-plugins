@@ -81,8 +81,9 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
   else the path of the checkout. It is for the row under the pointer, or for the cursor row when
   the pointer is on no row or has not moved for five seconds.
 - A right-click on a row opens Herdr's menu for what the row shows: the workspace, the tab or
-  the pane. The pane names the row in its terminal title (`herdr-menu;<kind>;<id>;<count>`) and
-  the fork opens the menu at the pointer.
+  the pane. The pane names the row in its terminal title
+  (`herdr-menu;<kind>;<id>;<count>;<agent pane>;<label>`) and the fork opens the menu at the
+  pointer.
 - The keys reach it only after the fork's `focus_sidebar` keybind.
 
 ## What a row is
@@ -99,7 +100,24 @@ The repository is on a second line under the name, in italics and its own color.
 
 A row whose agent works in a linked Git worktree has the worktree glyph after its name. For a workspace row this comes from Herdr. For a tab or pane row it comes from the agent's working directory.
 
-After the name of a root is the ticket key, when every run that agent supervises names the same key.
+## Labels
+
+A row can carry a short label at the right edge of its name line, such as a ticket key. It is the `label` token of the agent's pane, reported under the source `tree`, and the tree shows at most 12 cells of it.
+
+```sh
+herdr pane report-metadata "$HERDR_PANE_ID" --source tree --token label=SRE-923
+herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label
+```
+
+- In the fork's sidebar, the right-click menu of a row that is one agent has `Label...`. An empty text clears the label.
+- The `skill/` folder tells an agent to label its own pane when work starts on a ticket. Link it into your agent's skills directory:
+
+  ```sh
+  root="$(herdr plugin list --plugin herdr-tree --json | jq -r '.result.plugins[0].plugin_root')"
+  ln -s "$root/skill" ~/.claude/skills/herdr-tree
+  ```
+
+A root with no label shows the ticket key that every run it supervises names, when they all name the same one.
 
 ## Panes that do not count
 

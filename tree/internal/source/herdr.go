@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mago0/herdr-plugins/tree/internal/model"
@@ -117,6 +118,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 
 	hide := map[string]bool{}
+	tag := map[string]string{}
 	home, _ := os.UserHomeDir()
 	var s model.Snapshot
 	for _, p := range panes.Panes {
@@ -125,6 +127,9 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		}
 		if v := p.Tokens["tree"]; v != nil && *v == "hide" {
 			hide[p.Pane] = true
+		}
+		if v := p.Tokens["label"]; v != nil {
+			tag[p.Pane] = strings.TrimSpace(*v)
 		}
 	}
 	for _, w := range ws.Workspaces {
@@ -146,7 +151,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
-			Where: where(main, top, linked, home), Worktree: linked,
+			Where: where(main, top, linked, home), Worktree: linked, Tag: tag[a.Pane],
 		})
 	}
 	return s, nil

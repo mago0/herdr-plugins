@@ -222,12 +222,12 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if !ok || !p.deps.Sidebar {
 			break
 		}
-		target := menuTarget(p.rows[i].Node)
-		if target == "" {
+		n := p.rows[i].Node
+		if menuTarget(n) == "" {
 			break
 		}
 		p.menus++
-		return p, tea.SetWindowTitle(fmt.Sprintf("%s;%s;%d", menuRequest, target, p.menus))
+		return p, tea.SetWindowTitle(menuTitle(n, p.menus))
 	case tea.MouseButtonLeft:
 		i, ok := p.rowAt(m.Y)
 		if !ok {
@@ -249,6 +249,17 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 // menuRequest starts the terminal title that asks Herdr to open its menu for a row. A pane has
 // no other way to reach the Herdr client that draws it.
 const menuRequest = "herdr-menu"
+
+// menuTitle is the request for the menu of a row. Its last two parts are the pane of the row's
+// agent and the label that pane has, which Herdr needs to set a label. The pane is empty for a
+// row that holds several agents.
+func menuTitle(n *model.Node, count int) string {
+	pane := ""
+	if n.Focus == model.KindPane {
+		pane = n.ID
+	}
+	return fmt.Sprintf("%s;%s;%d;%s;%s", menuRequest, menuTarget(n), count, pane, n.Tag)
+}
 
 // menuTarget names what a row stands for on screen, as "<kind>;<id>". A group row has no menu.
 func menuTarget(n *model.Node) string {

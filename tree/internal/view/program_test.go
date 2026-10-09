@@ -382,7 +382,7 @@ func TestSidebarRightClickAsksHerdrForTheMenuOfTheRow(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a right-click on a row asks for its menu")
 	}
-	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;1" {
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;1;b;" {
 		t.Fatalf("request = %q", got)
 	}
 	if len(f.focused) != 0 {
@@ -390,7 +390,7 @@ func TestSidebarRightClickAsksHerdrForTheMenuOfTheRow(t *testing.T) {
 	}
 	// A second request on the same row is a new title, so Herdr sees it.
 	_, cmd = next.(Program).Update(rightClick(12, 4))
-	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;2" {
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;2;b;" {
 		t.Fatalf("second request = %q", got)
 	}
 }
@@ -401,6 +401,7 @@ func TestMenuTargetFollowsWhatTheRowShows(t *testing.T) {
 		want string
 	}{
 		{model.Node{ID: "w1:p1", Shown: model.KindWorkspace, WorkspaceID: "w1", TabID: "w1:t1"}, "workspace;w1"},
+		{model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}, "workspace;w1"},
 		{model.Node{ID: "w1:p1", Shown: model.KindTab, WorkspaceID: "w1", TabID: "w1:t1"}, "tab;w1:t1"},
 		{model.Node{ID: "w1:p1", Shown: model.KindPane, WorkspaceID: "w1", TabID: "w1:t1"}, "pane;w1:p1"},
 		{model.Node{ID: GroupHidden, Shown: model.KindGroup}, ""},
@@ -450,5 +451,16 @@ func TestSidebarLastLineSaysWhereTheRowWorks(t *testing.T) {
 	}
 	if got := lastLine(p); got != " ~/src/flo" {
 		t.Fatalf("a still pointer gives the line back to the cursor row, got %q", got)
+	}
+}
+
+func TestMenuRequestNamesTheAgentPaneOnlyForARowThatIsOneAgent(t *testing.T) {
+	agent := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Tag: "SRE-923"}
+	if got := menuTitle(agent, 3); got != "herdr-menu;workspace;w1;3;w1:p1;SRE-923" {
+		t.Errorf("agent row: %q", got)
+	}
+	holder := &model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}
+	if got := menuTitle(holder, 4); got != "herdr-menu;workspace;w1;4;;" {
+		t.Errorf("row that holds several agents: %q", got)
 	}
 }

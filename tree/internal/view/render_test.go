@@ -31,7 +31,7 @@ func TestRenderOpenTree(t *testing.T) {
 	tree := model.Tree{Roots: []*model.Node{ops}, NoAgent: []*model.Node{{ID: "x", Label: "x"}, {ID: "y", Label: "y"}}}
 	got := Render(Rows(tree, State{}), 40, 1, plain())
 	same(t, got, []string{
-		" ▾ * ops" + sp(2) + "ABC-1",
+		" ▾ * ops" + sp(27) + "ABC-1",
 		">  ├─ + review-86",
 		">  │" + sp(4) + "iam",
 		"   └─ o build ⇥",
@@ -47,7 +47,7 @@ func TestRenderFoldedParentShowsDescendantDots(t *testing.T) {
 			{ID: "b", Label: "b", Status: model.Blocked},
 		}}
 	rows := Rows(model.Tree{Roots: []*model.Node{ops}}, State{Folded: map[string]bool{"o": true}})
-	same(t, Render(rows, 40, -1, plain()), []string{" ▸ * ops" + sp(2) + "ABC-1" + sp(2) + "+ !"})
+	same(t, Render(rows, 40, -1, plain()), []string{" ▸ * ops" + sp(22) + "ABC-1" + sp(2) + "+ !"})
 }
 
 func TestRenderPaneGlyphAndUnknownDot(t *testing.T) {
@@ -138,6 +138,18 @@ func TestCutLeftKeepsTheEnd(t *testing.T) {
 			t.Errorf("cutLeft(%d) = %q, want %q", c.n, got, c.want)
 		}
 	}
+}
+
+func TestRenderTagIsAtTheRightEdgeOfAnyRow(t *testing.T) {
+	worker := &model.Node{ID: "w", Label: "a-worker-with-a-long-name", Status: model.Idle, Shown: model.KindWorkspace, Tag: "SRE-923"}
+	long := &model.Node{ID: "x", Label: "x", Status: model.Idle, Shown: model.KindWorkspace, Tag: "a-tag-that-is-too-long"}
+	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Ticket: "ABC-1", Tag: "mine",
+		Children: []*model.Node{worker, long}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 30, -1, plain()), []string{
+		" ▾ o lead" + sp(17) + "mine",
+		"   ├─ o a-worker-wit…" + sp(2) + "SRE-923",
+		"   └─ o x" + sp(9) + "a-tag-that-…",
+	})
 }
 
 func TestRenderNoRows(t *testing.T) {

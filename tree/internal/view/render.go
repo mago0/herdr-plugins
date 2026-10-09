@@ -10,6 +10,9 @@ import (
 // minLabel is the least count of cells a label or repo keeps in a narrow pane.
 const minLabel = 4
 
+// maxTag is the most cells a tag takes at the right edge.
+const maxTag = 12
+
 var (
 	bold  = lipgloss.NewStyle().Bold(true)
 	faint = lipgloss.NewStyle().Faint(true)
@@ -63,6 +66,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		if dot && r.Depth == 0 {
 			right = n.Ticket
 		}
+		if dot && n.Tag != "" {
+			right = cut(n.Tag, maxTag)
+		}
 		if dot && r.Depth > 0 {
 			switch n.Shown {
 			case model.KindTab:
@@ -107,7 +113,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		}
 		b.WriteString(th.paint(glyph, faint))
 		if right != "" {
-			b.WriteString("  " + th.paint(right, faint))
+			// The text ends at the right edge of the pane, before the dots of a folded row.
+			used := 1 + lipgloss.Width(ld) + dotCells(dot) + lipgloss.Width(label) + lipgloss.Width(glyph)
+			b.WriteString(strings.Repeat(" ", max(2, width-used-tail+2)) + th.paint(right, faint))
 		}
 		if len(r.Rollup) > 0 {
 			dots := make([]string, len(r.Rollup))

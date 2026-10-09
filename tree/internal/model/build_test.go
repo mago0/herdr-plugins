@@ -47,7 +47,9 @@ func ag(pane, tabID, name string) Agent {
 	return Agent{PaneID: pane, TabID: tabID, WorkspaceID: strings.Split(pane, ":")[0], Name: name, Status: Idle}
 }
 
-func run(name, sup string, entries ...Entry) Run { return Run{Name: name, Supervisor: sup, Entries: entries} }
+func run(name, sup string, entries ...Entry) Run {
+	return Run{Name: name, Supervisor: sup, Entries: entries}
+}
 
 func TestBuildWorkspaceWorkersAndNoAgent(t *testing.T) {
 	s := Snapshot{

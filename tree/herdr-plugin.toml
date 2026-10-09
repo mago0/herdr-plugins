@@ -1,0 +1,15 @@
+id = "herdr-tree"
+name = "Tree"
+version = "0.1.0"
+min_herdr_version = "0.9.1"
+description = "Agents as a tree by supervisor, with the state of each, and a jump to the selected one."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["go", "build", "-o", "bin/tree", "./cmd/tree"]
+
+[[panes]]
+id = "tree"
+title = "Agents by supervisor"
+placement = "popup"
+command = ["./bin/tree"]

@@ -186,3 +186,17 @@ func TestSnapshotReadsTheLabelToken(t *testing.T) {
 		t.Fatalf("tags = %q, %q", got.Agents[0].Tag, got.Agents[1].Tag)
 	}
 }
+
+func TestFocused(t *testing.T) {
+	s := serve(t, map[string]string{
+		"pane.list": `{"id":"tree","result":{"panes":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1"},
+			{"pane_id":"w1:p2","tab_id":"w1:t2","focused":true}]}}`,
+	})
+	if pane, tab := Focused(s); pane != "w1:p2" || tab != "w1:t2" {
+		t.Fatalf("got %q in %q", pane, tab)
+	}
+	if pane, tab := Focused(Socket{Path: "/nonexistent"}); pane != "" || tab != "" {
+		t.Fatalf("a failed call names no pane, got %q in %q", pane, tab)
+	}
+}

@@ -3,6 +3,7 @@ package view
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -462,5 +463,200 @@ func TestMenuRequestNamesTheAgentPaneOnlyForARowThatIsOneAgent(t *testing.T) {
 	holder := &model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}
 	if got := menuTitle(holder, 4); got != "herdr-menu;workspace;w1;4;;" {
 		t.Errorf("row that holds several agents: %q", got)
+	}
+}
+
+// stepper is a sidebar pane over a Herdr that has pane at in focus and moves the focus on a jump.
+// A jump to a row in lands puts the focus on the pane named there.
+type stepper struct {
+	*fake
+	at    string
+	lands map[string]string
+}
+
+func (s *stepper) start(t *testing.T) Program {
+	t.Helper()
+	d := s.deps()
+	d.Sidebar = true
+	d.Focus = func(n *model.Node) error {
+		s.focused = append(s.focused, n.ID)
+		if s.focusErr != nil {
+			return s.focusErr
+		}
+		s.at = n.ID
+		if pane, ok := s.lands[n.ID]; ok {
+			s.at = pane
+		}
+		return nil
+	}
+	d.Focused = func() (string, string) { return s.at, "" }
+	return start(t, s.fake, d)
+}
+
+var (
+	stepDown = tea.KeyMsg{Type: tea.KeyF20}
+	stepUp   = tea.KeyMsg{Type: tea.KeyF19}
+)
+
+// run sends each message, and then every message its commands return.
+func run(t *testing.T, p Program, msgs ...tea.Msg) Program {
+	t.Helper()
+	for _, m := range msgs {
+		next, cmd := p.Update(m)
+		p = next.(Program)
+		for cmd != nil {
+			next, cmd = p.Update(cmd())
+			p = next.(Program)
+		}
+	}
+	return p
+}
+
+func TestSidebarStepJumpsOneRowFromTheFocusedPane(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "a"}
+	p := s.start(t)
+	if selected(p) != "lead" {
+		t.Fatalf("starts on %q", selected(p))
+	}
+	p = run(t, p, stepDown)
+	if selected(p) != "b" || fmt.Sprint(s.focused) != "[b]" {
+		t.Fatalf("selected %q, focused %v, want b from the focused pane a", selected(p), s.focused)
+	}
+	p = run(t, p, stepUp, stepUp)
+	if selected(p) != "lead" || fmt.Sprint(s.focused) != "[b a lead]" {
+		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
+	}
+}
+
+func TestSidebarStepIgnoresACursorThatLeftTheFocusedPane(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "lead"}
+	p := run(t, s.start(t), stepDown)
+	p = send(t, p, key("down"), key("down"))
+	if selected(p) != "b1" {
+		t.Fatalf("selected %q, want b1", selected(p))
+	}
+	p = run(t, p, stepDown)
+	if selected(p) != "b" {
+		t.Fatalf("selected %q, want b: the step starts from the focused pane a", selected(p))
+	}
+}
+
+func TestSidebarStepSkipsGroupRowsAndWraps(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "solo"}
+	p := run(t, s.start(t), stepDown)
+	if selected(p) != "lead" {
+		t.Fatalf("selected %q, want lead past the two group rows and the end", selected(p))
+	}
+	p = run(t, p, stepUp)
+	if selected(p) != "solo" {
+		t.Fatalf("selected %q, want solo past the start and the two group rows", selected(p))
+	}
+	// An open group shows its rows, and a step stops on them.
+	p = send(t, p, key("down"), key("enter"))
+	p = run(t, p, stepDown)
+	if selected(p) != "repo1" || fmt.Sprint(s.focused) != "[lead solo repo1]" {
+		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
+	}
+}
+
+func TestSidebarStepSkipsTheRowsOfAFoldedParent(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "lead"}
+	p := send(t, s.start(t), key("space"))
+	p = run(t, p, stepDown)
+	if selected(p) != "solo" || fmt.Sprint(s.focused) != "[solo]" {
+		t.Fatalf("selected %q, focused %v, want solo", selected(p), s.focused)
+	}
+}
+
+func TestSidebarStepsThatArriveTogetherEachMoveOneRow(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "lead"}
+	p := s.start(t)
+	next, first := p.Update(stepDown)
+	next, second := next.(Program).Update(stepDown)
+	next, third := next.(Program).Update(stepDown)
+	if second != nil || third != nil {
+		t.Fatal("a step waits for the step before it")
+	}
+	p = next.(Program)
+	for cmd := first; cmd != nil; {
+		next, cmd = p.Update(cmd())
+		p = next.(Program)
+	}
+	if selected(p) != "b1" || fmt.Sprint(s.focused) != "[a b b1]" {
+		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
+	}
+	p = run(t, p, stepDown)
+	if selected(p) != "solo" {
+		t.Fatalf("selected %q, want solo: the next step is not held back", selected(p))
+	}
+}
+
+func TestSidebarStepStaysOnARowThatPutsTheFocusOnAnotherRow(t *testing.T) {
+	// A jump to lead leaves the focus on its pane a, which has a row of its own.
+	s := &stepper{fake: &fake{tree: sample()}, at: "a", lands: map[string]string{"lead": "a"}}
+	p := run(t, s.start(t), stepUp)
+	p = send(t, p, loadedMsg{tree: s.tree, current: "a"})
+	if selected(p) != "lead" {
+		t.Fatalf("selected %q, want lead: a reload keeps the row of the step", selected(p))
+	}
+	p = run(t, p, stepUp)
+	if selected(p) != "solo" {
+		t.Fatalf("selected %q, want solo: the step goes on from lead", selected(p))
+	}
+}
+
+func TestSidebarStepErrorIsShownAndTheNextStepWorks(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample(), focusErr: errors.New("pane_not_found: gone")}, at: "lead"}
+	p := s.start(t)
+	next, locate := p.Update(stepDown)
+	next, _ = next.(Program).Update(stepDown)
+	next, jump := next.(Program).Update(locate())
+	next, reload := next.(Program).Update(jump())
+	p = next.(Program)
+	if !strings.Contains(p.View(), "pane_not_found") || reload == nil {
+		t.Fatalf("a failed step shows the error and reloads the tree:\n%s", p.View())
+	}
+	p = run(t, p, reload())
+	if len(s.focused) != 1 {
+		t.Fatalf("focused %v: a failed step drops the steps that wait", s.focused)
+	}
+	s.focusErr = nil
+	p = run(t, p, stepDown)
+	if selected(p) != "a" || fmt.Sprint(s.focused) != "[a a]" {
+		t.Fatalf("selected %q, focused %v, want a again from the focused pane lead", selected(p), s.focused)
+	}
+}
+
+func TestStepKeysDoNothingOutsideTheSidebar(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := start(t, f, f.deps())
+	next, cmd := p.Update(stepDown)
+	if cmd != nil || selected(next.(Program)) != "lead" {
+		t.Fatal("a popup pane has no step keys")
+	}
+}
+
+// keys records the keys Bubble Tea reads and quits after two.
+type keys []string
+
+func (k keys) Init() tea.Cmd { return nil }
+func (k keys) View() string  { return "" }
+func (k keys) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m, ok := msg.(tea.KeyMsg); ok {
+		if k = append(k, m.String()); len(k) == 2 {
+			return k, tea.Quit
+		}
+	}
+	return k, nil
+}
+
+func TestStepKeysAreTheBytesHerdrSends(t *testing.T) {
+	in := strings.NewReader("\x1b[19;2~\x1b[18;2~")
+	got, err := tea.NewProgram(keys{}, tea.WithInput(in), tea.WithOutput(io.Discard)).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (keys{stepNext, stepPrevious}); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("read %v, want %v", got, want)
 	}
 }

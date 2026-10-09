@@ -85,6 +85,10 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
   (`herdr-menu;<kind>;<id>;<count>;<agent pane>;<label>`) and the fork opens the menu at the
   pointer.
 - The keys reach it only after the fork's `focus_sidebar` keybind.
+- The fork's `next_workspace` and `previous_workspace` keybinds (`next_agent` and `previous_agent`
+  in the agents section) move the focus one row down or up the tree. The fork sends the pane the
+  keys `F20` and `F19` (`ESC [ 19 ; 2 ~` and `ESC [ 18 ; 2 ~`). A step starts from the row of the
+  pane in focus, skips the group rows and the rows of a folded parent, and wraps at the ends.
 
 ## What a row is
 

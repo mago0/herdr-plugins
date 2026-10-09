@@ -22,6 +22,8 @@ type Deps struct {
 	Sidebar bool
 	// Current returns the pane and tab Herdr has in focus, as of the last Load.
 	Current func() (pane, tab string)
+	// Focused asks Herdr for the pane and tab it has in focus now. Both are empty when it fails.
+	Focused func() (pane, tab string)
 }
 
 type (
@@ -31,8 +33,23 @@ type (
 		// current and currentTab are the pane and tab Herdr has in focus.
 		current, currentTab string
 	}
-	focusedMsg struct{ err error }
-	tickMsg    struct{}
+	focusedMsg struct {
+		err error
+		// row is the row a step jumped to, and pane is the pane Herdr has in focus after it.
+		row, pane string
+	}
+	// stepMsg starts a step from the pane and tab Herdr has in focus.
+	stepMsg struct {
+		by        int
+		pane, tab string
+	}
+	tickMsg struct{}
+)
+
+// Herdr sends these keys to a sidebar pane to move its focus one row down or up the tree.
+const (
+	stepNext     = "f20"
+	stepPrevious = "f19"
 )
 
 // Lines of a popup view that are not tree rows: title and blank above, footer below.
@@ -66,7 +83,13 @@ type Program struct {
 	current string
 	// free is true while the wheel has moved the view away from the cursor.
 	free bool
-	err  error
+	// stepping is true from a step key until its jump ends. queued is the steps that wait for
+	// it: more than zero is down, less is up.
+	stepping bool
+	queued   int
+	// stepped is the row of the last step, while the cursor is still there.
+	stepped string
+	err     error
 }
 
 func New(d Deps, folds map[string]bool, th Theme) Program {
@@ -124,10 +147,20 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return p, tea.Quit
 		}
 		p.err = m.err
+		if m.row != "" {
+			return p.stepDone(m)
+		}
 		if m.err == nil {
 			return p, nil
 		}
 		return p, p.load()
+	case stepMsg:
+		// The cursor is the start when the last step left it there and the focus did not move.
+		held := m.pane == p.current && p.stepped != "" && p.stepped == p.sel
+		if m.pane != "" && !held && p.place(m.pane, m.tab) {
+			p.current = m.pane
+		}
+		return p.advance(m.by)
 	case tea.MouseMsg:
 		return p.mouse(m)
 	case tea.KeyMsg:
@@ -141,6 +174,10 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.move(-1)
 		case "down", "j":
 			p.move(1)
+		case stepNext:
+			return p.step(1)
+		case stepPrevious:
+			return p.step(-1)
 		case " ":
 			p.toggle()
 		case "a":
@@ -164,6 +201,75 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (p Program) jump(n *model.Node) tea.Cmd {
 	focus := p.deps.Focus
 	return func() tea.Msg { return focusedMsg{err: focus(n)} }
+}
+
+// step moves the focus of Herdr one row down or up from the row of the pane it has in focus.
+// A step that comes while one is in work waits for it, so each one starts from the row before.
+func (p Program) step(by int) (tea.Model, tea.Cmd) {
+	if !p.deps.Sidebar {
+		return p, nil
+	}
+	if p.stepping {
+		p.queued += by
+		return p, nil
+	}
+	p.stepping = true
+	focused := p.deps.Focused
+	if focused == nil {
+		return p.advance(by)
+	}
+	return p, func() tea.Msg {
+		m := stepMsg{by: by}
+		m.pane, m.tab = focused()
+		return m
+	}
+}
+
+// advance puts the cursor on the next row in the direction of by that can take the focus, past
+// the ends of the tree, and jumps to it. Group rows cannot take the focus.
+func (p Program) advance(by int) (tea.Model, tea.Cmd) {
+	for i := 1; i <= len(p.rows); i++ {
+		at := ((p.cursor+by*i)%len(p.rows) + len(p.rows)) % len(p.rows)
+		n := p.rows[at].Node
+		if n.Shown == model.KindGroup {
+			continue
+		}
+		p.cursor, p.free, p.hover = at, false, ""
+		p.settle()
+		focus, focused := p.deps.Focus, p.deps.Focused
+		return p, func() tea.Msg {
+			m := focusedMsg{err: focus(n), row: n.ID}
+			if m.err == nil && focused != nil {
+				m.pane, _ = focused()
+			}
+			return m
+		}
+	}
+	p.stepping, p.queued = false, 0
+	return p, nil
+}
+
+// stepDone ends the jump of a step and starts the next step that waits.
+func (p Program) stepDone(m focusedMsg) (tea.Model, tea.Cmd) {
+	if m.err != nil {
+		p.stepping, p.queued, p.stepped = false, 0, ""
+		return p, p.load()
+	}
+	p.stepped = m.row
+	// The cursor stays on the row of the step when Herdr puts the focus on another row.
+	if m.pane != "" {
+		p.current = m.pane
+	}
+	if p.queued == 0 {
+		p.stepping = false
+		return p, nil
+	}
+	by := 1
+	if p.queued < 0 {
+		by = -1
+	}
+	p.queued -= by
+	return p.advance(by)
 }
 
 // chrome is the count of lines above the rows and of all lines that are not rows.

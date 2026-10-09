@@ -169,3 +169,23 @@ func Focus(c Caller, n *model.Node) error {
 	}
 	return errors.New("nothing to focus")
 }
+
+// Focused returns the pane Herdr has in focus and its tab. Both are empty when the call fails.
+func Focused(c Caller) (pane, tab string) {
+	var panes struct {
+		Panes []struct {
+			Pane    string `json:"pane_id"`
+			Tab     string `json:"tab_id"`
+			Focused bool   `json:"focused"`
+		} `json:"panes"`
+	}
+	if err := c.Call("pane.list", nil, &panes); err != nil {
+		return "", ""
+	}
+	for _, p := range panes.Panes {
+		if p.Focused {
+			return p.Pane, p.Tab
+		}
+	}
+	return "", ""
+}

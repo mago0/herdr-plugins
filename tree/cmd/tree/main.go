@@ -76,6 +76,7 @@ func main() {
 			}
 			return "", ""
 		},
+		Focused: func() (string, string) { return source.Focused(sock) },
 	}
 	options := []tea.ProgramOption{tea.WithAltScreen()}
 	if deps.Sidebar {

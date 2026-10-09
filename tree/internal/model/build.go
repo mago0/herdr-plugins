@@ -120,6 +120,36 @@ func Build(s Snapshot, d Dispatch) Tree {
 			}
 			heads = append(heads, a.PaneID)
 		}
+		// When one head alone supervises workers, it stands for the tab and the heads that
+		// nothing dispatched hang under it.
+		if len(heads) > 1 {
+			supervises := map[string]bool{}
+			for _, p := range up {
+				supervises[p] = true
+			}
+			var leads []string
+			for _, h := range heads {
+				if supervises[h] {
+					leads = append(leads, h)
+				}
+			}
+			// A head that another agent dispatched keeps its own supervisor, so the tab then
+			// stays a holder.
+			free := len(leads) == 1
+			for _, h := range heads {
+				if _, dispatched := up[h]; free && h != leads[0] && dispatched {
+					free = false
+				}
+			}
+			if free {
+				for _, h := range heads {
+					if h != leads[0] {
+						up[h] = leads[0]
+					}
+				}
+				heads = leads
+			}
+		}
 		w := wsByID[t.WorkspaceID]
 		switch {
 		case len(heads) == 1:

@@ -113,18 +113,45 @@ ops w ops
 	}
 }
 
-func TestBuildTwoAgentsInOneTab(t *testing.T) {
+func TestBuildTheOneSupervisorOfATabStandsForIt(t *testing.T) {
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "add-probe", "api", 2)},
 		Tabs:       []Tab{tab("w1:t1", "planning", 1), tab("w2:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", "left"), ag("w1:p2", "w1:t1", "right"), ag("w2:p1", "w2:t1", "add-probe")},
 	}
 	d := Dispatch{Runs: []Run{run("r", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"})}}
+	// The other pane of the tab hangs under the supervisor, with its workers.
+	check(t, Build(s, d), `
+ops w ops
+  right p ops
+  add-probe w api
+`)
+}
+
+func TestBuildATabWithNoSupervisorOrSeveralHoldsItsPanes(t *testing.T) {
+	s := Snapshot{
+		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "a", "api", 2), ws("w3", "b", "api", 3)},
+		Tabs:       []Tab{tab("w1:t1", "planning", 1), tab("w2:t1", "1", 1), tab("w3:t1", "1", 1)},
+		Agents: []Agent{ag("w1:p1", "w1:t1", "left"), ag("w1:p2", "w1:t1", "right"),
+			ag("w2:p1", "w2:t1", "a"), ag("w3:p1", "w3:t1", "b")},
+	}
+	check(t, Build(s, Dispatch{}), `
+ops w ops
+  left p ops
+  right p ops
+a w api
+b w api
+`)
+	d := Dispatch{Runs: []Run{
+		run("r1", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"}),
+		run("r2", "w1:p2", Entry{PaneID: "w3:p1", WorkspaceID: "w3", Created: "1"}),
+	}}
 	check(t, Build(s, d), `
 ops w ops
   left p ops
-    add-probe w api
+    a w api
   right p ops
+    b w api
 `)
 }
 

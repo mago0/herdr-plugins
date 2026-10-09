@@ -98,6 +98,7 @@ A row is one pane that hosts an agent. Terminals have no row.
 - A worker that dispatch placed as a tab is a row under its supervisor, marked with the tab glyph.
 - A workspace with supervising agents in several tabs is a row with one row for each tab under it.
 - A tab with several agents is a row with one row for each pane under it, marked with the pane glyph.
+- When one agent of such a tab is the only one that supervises workers, the tab's row is that agent. The other panes of the tab are rows under it, with its workers.
 - `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
 
 The repository is on a second line under the name, in italics and its own color. A row has that line only when its repository is not the one of the row it hangs from. Rows of one supervisor are in workspace order, then in tab bar order.

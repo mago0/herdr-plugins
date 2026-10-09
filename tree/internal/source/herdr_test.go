@@ -145,3 +145,24 @@ func TestFocusByKind(t *testing.T) {
 		t.Error("a group row has nothing to focus")
 	}
 }
+
+func TestSnapshotNumbersTabsByTheirPlaceInTheTabBar(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list": `{"id":"tree","result":{"tabs":[
+			{"tab_id":"w1:t9","workspace_id":"w1","number":9,"label":"moved first"},
+			{"tab_id":"w2:t1","workspace_id":"w2","number":1,"label":"other"},
+			{"tab_id":"w1:t1","workspace_id":"w1","number":1,"label":"second"}]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[]}}`,
+		"pane.list":  `{"id":"tree","result":{"panes":[]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []int{1, 1, 2} {
+		if got.Tabs[i].Number != want {
+			t.Errorf("tab %s has number %d, want %d", got.Tabs[i].ID, got.Tabs[i].Number, want)
+		}
+	}
+}

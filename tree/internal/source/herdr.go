@@ -79,7 +79,6 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		Tabs []struct {
 			ID        string `json:"tab_id"`
 			Workspace string `json:"workspace_id"`
-			Number    int    `json:"number"`
 			Label     string `json:"label"`
 			Status    string `json:"agent_status"`
 		} `json:"tabs"`
@@ -129,8 +128,11 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		}
 		s.Workspaces = append(s.Workspaces, m)
 	}
+	// Herdr lists tabs in tab bar order. Its own number stays with a tab that is moved.
+	place := map[string]int{}
 	for _, t := range tabs.Tabs {
-		s.Tabs = append(s.Tabs, model.Tab{ID: t.ID, WorkspaceID: t.Workspace, Number: t.Number, Label: t.Label, Status: t.Status})
+		place[t.Workspace]++
+		s.Tabs = append(s.Tabs, model.Tab{ID: t.ID, WorkspaceID: t.Workspace, Number: place[t.Workspace], Label: t.Label, Status: t.Status})
 	}
 	for _, a := range agents.Agents {
 		s.Agents = append(s.Agents, model.Agent{

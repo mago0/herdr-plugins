@@ -6,15 +6,21 @@ Herdr's sidebar groups workspaces by repository. Supervised work has another sha
 
 ```
  ▾ ● ops
-   ├─ ● review monitor ⇥                     ops
-   │  ├─ ● review-86                         iam
-   │  └─ ● review-234                        billing
-   └─ ● planning ⇥                           ops
-      └─ ● add-probe                         api
+   │ ops
+   ├─ ● review monitor ⇥
+   │  ├─ ● review-86
+   │  │    iam
+   │  └─ ● review-234
+   │       billing
+   └─ ● planning ⇥
+      └─ ● add-probe
+           api
  ▾ ● platform migration
-   ├─ ● add-vpc-routes                       infra
-   └─ ● migrate-scheduler                    scheduler
-      └─ ● build-images ⇥                    scheduler
+   ├─ ● add-vpc-routes
+   │    infra
+   └─ ● migrate-scheduler
+      │ scheduler
+      └─ ● build-images ⇥
  ▸ No agent (8)
  ▸ Hidden (7)
 ```
@@ -71,6 +77,9 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
 - The cursor follows the pane that Herdr has in focus.
 - A click on a row jumps to it. A click on the part before the state dot folds a row that has
   children. The wheel scrolls.
+- A right-click on a row opens Herdr's menu for what the row shows: the workspace, the tab or
+  the pane. The pane names the row in its terminal title (`herdr-menu;<kind>;<id>;<count>`) and
+  the fork opens the menu at the pointer.
 - The keys reach it only after the fork's `focus_sidebar` keybind.
 
 ## What a row is
@@ -83,7 +92,9 @@ A row is one pane that hosts an agent. Terminals have no row.
 - A tab with several agents is a row with one row for each pane under it, marked with the pane glyph.
 - `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
 
-The right column is the ticket key on a root, when every run that agent supervises names the same key. Below a root it is the repository.
+The repository is on a second line under the name, in italics and its own color. A row has that line only when its repository is not the one of the row it hangs from. Rows of one supervisor are in workspace order, then in tab bar order.
+
+After the name of a root is the ticket key, when every run that agent supervises names the same key.
 
 ## Panes that do not count
 
@@ -112,6 +123,8 @@ working = "#f9e2af"
 done = "#a6e3a1"
 idle = "#89b4fa"
 unknown = "#6c7086"
+# The repository line.
+repo = "#94e2d5"
 ```
 
 ## Use in scripts

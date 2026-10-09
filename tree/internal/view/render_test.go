@@ -31,9 +31,11 @@ func TestRenderOpenTree(t *testing.T) {
 	tree := model.Tree{Roots: []*model.Node{ops}, NoAgent: []*model.Node{{ID: "x", Label: "x"}, {ID: "y", Label: "y"}}}
 	got := Render(Rows(tree, State{}), 40, 1, plain())
 	same(t, got, []string{
-		" ▾ * ops" + sp(11) + "ABC-1",
-		">  ├─ + review-86" + sp(2) + "iam",
-		"   └─ o build ⇥" + sp(4) + "api",
+		" ▾ * ops" + sp(2) + "ABC-1",
+		">  ├─ + review-86",
+		">  │" + sp(4) + "iam",
+		"   └─ o build ⇥",
+		sp(8) + "api",
 		" ▸ No agent (2)",
 	})
 }
@@ -54,7 +56,8 @@ func TestRenderPaneGlyphAndUnknownDot(t *testing.T) {
 	got := Render(Rows(model.Tree{Roots: []*model.Node{tab}}, State{}), 40, -1, plain())
 	same(t, got, []string{
 		" ▾ · planning",
-		"   └─ o left ›" + sp(2) + "ops",
+		"   └─ o left ›",
+		sp(8) + "ops",
 	})
 }
 
@@ -69,7 +72,7 @@ func TestRenderGuideLines(t *testing.T) {
 		"   ├─ o a",
 		"   │  ├─ o a1",
 		"   │  └─ o a2",
-		"   └▸ o b" + sp(8) + "o",
+		"   └▸ o b" + sp(2) + "o",
 	})
 }
 
@@ -86,18 +89,33 @@ func TestRenderNarrowAndWide(t *testing.T) {
 			}
 		}
 	}
-	// At a width that fits the right column, a cut label ends in an ellipsis and the column still lines up.
+	// A cut label ends in an ellipsis, and the ticket stays on the line.
 	got := Render(rows, 30, -1, plain())
 	if !strings.Contains(got[0], "…") || !strings.HasSuffix(got[0], "ABC-12345") {
 		t.Errorf("root line = %q", got[0])
 	}
-	if !strings.Contains(got[1], "…") || !strings.HasSuffix(got[1], "repository") {
-		t.Errorf("child line = %q", got[1])
+	if !strings.Contains(got[1], "…") || strings.TrimSpace(got[2]) != "repository" {
+		t.Errorf("child lines = %q, %q", got[1], got[2])
 	}
-	a, b := strings.Index(got[0], "ABC-12345"), strings.Index(got[1], "repository")
-	if lipgloss.Width(got[0][:a]) != lipgloss.Width(got[1][:b]) {
-		t.Errorf("right column is not aligned:\n%q\n%q", got[0], got[1])
+}
+
+func TestRenderRepoBelowTheNameOnlyWhereItChanges(t *testing.T) {
+	n := func(id, repo string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: repo, Shown: model.KindWorkspace, Children: kids}
 	}
+	tree := model.Tree{Roots: []*model.Node{
+		n("main", "flo", n("same", "flo"), n("mid", "iam", n("leaf", "iam"), n("other", "ops"))),
+	}}
+	same(t, Render(Rows(tree, State{}), 40, -1, plain()), []string{
+		" ▾ o main",
+		"   │ flo",
+		"   ├─ o same",
+		"   └─ o mid",
+		"      │ iam",
+		"      ├─ o leaf",
+		"      └─ o other",
+		sp(11) + "ops",
+	})
 }
 
 func TestRenderNoRows(t *testing.T) {

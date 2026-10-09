@@ -14,6 +14,8 @@ type Theme struct {
 	Colors    map[string]string
 	TabGlyph  string
 	PaneGlyph string
+	// RepoColor is the color of the repo line under a row.
+	RepoColor string
 }
 
 // DefaultTheme uses Nerd Font glyphs for tab and pane rows.
@@ -50,6 +52,9 @@ func LoadTheme(configDir string) Theme {
 	if file.Glyphs.Pane != "" {
 		th.PaneGlyph = file.Glyphs.Pane
 	}
+	if c := file.Colors["repo"]; c != "" {
+		th.RepoColor = c
+	}
 	for state, color := range file.Colors {
 		if _, known := th.Colors[state]; known && color != "" {
 			th.Colors[state] = color
@@ -84,4 +89,9 @@ func (th Theme) paint(s string, st lipgloss.Style) string {
 		return s
 	}
 	return st.Render(s)
+}
+
+// repo draws a repo name apart from the row names: italic, in its own color.
+func (th Theme) repo(s string) string {
+	return th.paint(s, lipgloss.NewStyle().Italic(true).Faint(true).Foreground(lipgloss.Color(th.RepoColor)))
 }

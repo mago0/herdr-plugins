@@ -17,6 +17,16 @@ type Row struct {
 	Last   bool
 	Trunk  []bool
 	Rollup []string
+	// Repo is the repository shown on a second line: set where it is not the repo of the row above.
+	Repo string
+}
+
+// Height is the count of lines the row takes on screen.
+func (r Row) Height() int {
+	if r.Repo != "" {
+		return 2
+	}
+	return 1
 }
 
 // State is what the user has set: which rows are folded and whether the attention filter is on.
@@ -69,8 +79,8 @@ func group(id, name string, members []*model.Node) *model.Node {
 // Rows flattens the tree to the lines on screen.
 func Rows(t model.Tree, st State) []Row {
 	var out []Row
-	var walk func(n *model.Node, depth int, trunk []bool, last bool)
-	walk = func(n *model.Node, depth int, trunk []bool, last bool) {
+	var walk func(n *model.Node, depth int, trunk []bool, last bool, above string)
+	walk = func(n *model.Node, depth int, trunk []bool, last bool, above string) {
 		kids := n.Children
 		if st.Attention {
 			kids = nil
@@ -82,6 +92,9 @@ func Rows(t model.Tree, st State) []Row {
 		}
 		r := Row{Node: n, Depth: depth, HasChildren: len(kids) > 0, Last: last, Trunk: trunk}
 		r.Folded = r.HasChildren && st.folded(n)
+		if n.Shown != model.KindGroup && n.Repo != above {
+			r.Repo = n.Repo
+		}
 		if r.Folded && n.Shown != model.KindGroup {
 			r.Rollup = statuses(kids)
 		}
@@ -92,23 +105,23 @@ func Rows(t model.Tree, st State) []Row {
 				below = append(append([]bool(nil), trunk...), !last)
 			}
 			for i, c := range kids {
-				walk(c, depth+1, below, i == len(kids)-1)
+				walk(c, depth+1, below, i == len(kids)-1, n.Repo)
 			}
 		}
 	}
 	for _, n := range t.Roots {
 		if !st.Attention || needs(n) {
-			walk(n, 0, nil, true)
+			walk(n, 0, nil, true, "")
 		}
 	}
 	if st.Attention {
 		return out
 	}
 	if len(t.NoAgent) > 0 {
-		walk(group(GroupNoAgent, "No agent", t.NoAgent), 0, nil, true)
+		walk(group(GroupNoAgent, "No agent", t.NoAgent), 0, nil, true, "")
 	}
 	if len(t.Hidden) > 0 {
-		walk(group(GroupHidden, "Hidden", t.Hidden), 0, nil, true)
+		walk(group(GroupHidden, "Hidden", t.Hidden), 0, nil, true, "")
 	}
 	return out
 }

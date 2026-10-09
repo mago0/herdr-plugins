@@ -2,6 +2,7 @@ package view
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -334,5 +335,78 @@ func TestSidebarPlacesTheCursorWhenTheFocusedPaneGetsARow(t *testing.T) {
 	p = send(t, p, loadedMsg{tree: grown, current: "late"})
 	if selected(p) != "late" {
 		t.Fatalf("selected %q, want late", selected(p))
+	}
+}
+
+func repos() model.Tree {
+	n := func(id, repo string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: repo, Shown: model.KindWorkspace, WorkspaceID: "w-" + id, Children: kids}
+	}
+	return model.Tree{Roots: []*model.Node{n("main", "flo", n("a", "iam"), n("b", "ops"), n("c", "api"))}}
+}
+
+func TestSidebarClickOnARepoLineSelectsItsRow(t *testing.T) {
+	f := &fake{tree: repos()}
+	p := sidebar(t, f)
+	// Lines: main, flo, a, iam, b, ops, c, api.
+	for y, want := range []string{"main", "main", "a", "a", "b", "b", "c", "c"} {
+		next, _ := p.Update(click(12, y))
+		if got := selected(next.(Program)); got != want {
+			t.Errorf("line %d selects %q, want %q", y, got, want)
+		}
+	}
+}
+
+func TestSidebarScrollKeepsBothLinesOfTheCursorRow(t *testing.T) {
+	f := &fake{tree: repos()}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 40, Height: 4})
+	p = send(t, p, key("down"), key("down"))
+	v := p.View()
+	if !strings.Contains(v, "o b") || !strings.Contains(v, "ops") {
+		t.Fatalf("the name and repo of the cursor row are both in view:\n%s", v)
+	}
+	if n := strings.Count(v, "\n") + 1; n > 4 {
+		t.Fatalf("the view is %d lines in a pane of 4", n)
+	}
+}
+
+func rightClick(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonRight}
+}
+
+func TestSidebarRightClickAsksHerdrForTheMenuOfTheRow(t *testing.T) {
+	f := &fake{tree: repos()}
+	p := sidebar(t, f)
+	next, cmd := p.Update(rightClick(12, 4))
+	if cmd == nil {
+		t.Fatal("a right-click on a row asks for its menu")
+	}
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;1" {
+		t.Fatalf("request = %q", got)
+	}
+	if len(f.focused) != 0 {
+		t.Fatal("a right-click must not jump")
+	}
+	// A second request on the same row is a new title, so Herdr sees it.
+	_, cmd = next.(Program).Update(rightClick(12, 4))
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;2" {
+		t.Fatalf("second request = %q", got)
+	}
+}
+
+func TestMenuTargetFollowsWhatTheRowShows(t *testing.T) {
+	for _, c := range []struct {
+		n    model.Node
+		want string
+	}{
+		{model.Node{ID: "w1:p1", Shown: model.KindWorkspace, WorkspaceID: "w1", TabID: "w1:t1"}, "workspace;w1"},
+		{model.Node{ID: "w1:p1", Shown: model.KindTab, WorkspaceID: "w1", TabID: "w1:t1"}, "tab;w1:t1"},
+		{model.Node{ID: "w1:p1", Shown: model.KindPane, WorkspaceID: "w1", TabID: "w1:t1"}, "pane;w1:p1"},
+		{model.Node{ID: GroupHidden, Shown: model.KindGroup}, ""},
+	} {
+		if got := menuTarget(&c.n); got != c.want {
+			t.Errorf("%+v: target %q, want %q", c.n, got, c.want)
+		}
 	}
 }

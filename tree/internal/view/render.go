@@ -7,7 +7,8 @@ import (
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
 
-const minRightColumn = 8
+// minLabel is the least count of cells a label or repo keeps in a narrow pane.
+const minLabel = 4
 
 var (
 	bold  = lipgloss.NewStyle().Bold(true)
@@ -29,70 +30,66 @@ func cut(s string, n int) string {
 	return string(r) + "…"
 }
 
-// Render draws one line per row. selected is the index of the row under the cursor, or -1.
+// Render draws the rows: one line for a row, and a second line for its repo where Row.Repo is set.
+// selected is the index of the row under the cursor, or -1.
 func Render(rows []Row, width, selected int, th Theme) []string {
-	type parts struct {
-		lead, label, glyph, right string
-		dot                       bool
+	var lines []string
+	add := func(line string) {
+		line = strings.TrimRight(line, " ")
+		if width > 0 {
+			line = strings.TrimRight(lipgloss.NewStyle().MaxWidth(width).Render(line), " ")
+		}
+		lines = append(lines, line)
 	}
-	ps := make([]parts, len(rows))
-	maxLeft, maxRight := 0, 0
 	for i, r := range rows {
 		n := r.Node
-		p := parts{lead: lead(r), label: n.Label, dot: n.Shown != model.KindGroup}
-		if p.dot {
-			if r.Depth == 0 {
-				p.right = n.Ticket
-			} else {
-				p.right = n.Repo
-				switch n.Shown {
-				case model.KindTab:
-					p.glyph = " " + th.TabGlyph
-				case model.KindPane:
-					p.glyph = " " + th.PaneGlyph
-				}
+		dot := n.Shown != model.KindGroup
+		glyph, right := "", ""
+		if dot && r.Depth == 0 {
+			right = n.Ticket
+		}
+		if dot && r.Depth > 0 {
+			switch n.Shown {
+			case model.KindTab:
+				glyph = " " + th.TabGlyph
+			case model.KindPane:
+				glyph = " " + th.PaneGlyph
 			}
 		}
-		ps[i] = p
-		maxLeft = max(maxLeft, lipgloss.Width(p.lead)+dotCells(p.dot)+lipgloss.Width(p.label)+lipgloss.Width(p.glyph))
-		maxRight = max(maxRight, lipgloss.Width(p.right))
-	}
+		tail := 0
+		if right != "" {
+			tail += 2 + lipgloss.Width(right)
+		}
+		if len(r.Rollup) > 0 {
+			tail += 1 + 2*len(r.Rollup)
+		}
+		ld := lead(r)
+		label := n.Label
+		if width > 0 {
+			label = cut(label, max(minLabel, width-1-lipgloss.Width(ld)-dotCells(dot)-lipgloss.Width(glyph)-tail))
+		}
 
-	// The right column starts two cells after the widest left part, or earlier in a narrow pane.
-	col := maxLeft + 2
-	if width > 0 {
-		col = min(col, width-1-maxRight-1)
-	}
-	col = max(col, minRightColumn)
-
-	lines := make([]string, len(rows))
-	for i, r := range rows {
-		p := ps[i]
-		label := cut(p.label, col-2-lipgloss.Width(p.lead)-dotCells(p.dot)-lipgloss.Width(p.glyph))
-		used := lipgloss.Width(p.lead) + dotCells(p.dot) + lipgloss.Width(label) + lipgloss.Width(p.glyph)
-
-		var b strings.Builder
+		mark := " "
 		switch {
 		case i != selected:
-			b.WriteString(" ")
 		case th.Plain:
-			b.WriteString(">")
+			mark = ">"
 		default:
-			b.WriteString(bold.Render("▌"))
+			mark = bold.Render("▌")
 		}
-		b.WriteString(th.paint(p.lead, faint))
-		if p.dot {
-			b.WriteString(th.dot(r.Node.Status) + " ")
+		var b strings.Builder
+		b.WriteString(mark + th.paint(ld, faint))
+		if dot {
+			b.WriteString(th.dot(n.Status) + " ")
 		}
-		if r.Depth == 0 && p.dot {
+		if r.Depth == 0 && dot {
 			b.WriteString(th.paint(label, bold))
 		} else {
 			b.WriteString(label)
 		}
-		b.WriteString(th.paint(p.glyph, faint))
-		if p.right != "" || len(r.Rollup) > 0 {
-			b.WriteString(strings.Repeat(" ", max(1, col-used)))
-			b.WriteString(th.paint(p.right, faint))
+		b.WriteString(th.paint(glyph, faint))
+		if right != "" {
+			b.WriteString("  " + th.paint(right, faint))
 		}
 		if len(r.Rollup) > 0 {
 			dots := make([]string, len(r.Rollup))
@@ -101,13 +98,37 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 			}
 			b.WriteString("  " + strings.Join(dots, " "))
 		}
-		line := strings.TrimRight(b.String(), " ")
-		if width > 0 {
-			line = lipgloss.NewStyle().MaxWidth(width).Render(line)
+		add(b.String())
+		if r.Repo != "" {
+			under := below(r)
+			repo := r.Repo
+			if width > 0 {
+				repo = cut(repo, max(minLabel, width-1-lipgloss.Width(under)))
+			}
+			add(mark + th.paint(under, faint) + th.repo(repo))
 		}
-		lines[i] = strings.TrimRight(line, " ")
 	}
 	return lines
+}
+
+// below is the part of a repo line before the repo: the guide lines that run past the row, and
+// the line down to its children when they are in view. The repo starts under the label.
+func below(r Row) string {
+	var b strings.Builder
+	b.WriteString("  ")
+	if r.Depth > 0 {
+		for _, runs := range append(append([]bool(nil), r.Trunk...), !r.Last) {
+			if runs {
+				b.WriteString("│  ")
+			} else {
+				b.WriteString("   ")
+			}
+		}
+	}
+	if r.HasChildren && !r.Folded {
+		return b.String() + "│ "
+	}
+	return b.String() + "  "
 }
 
 // lead is the fold mark of a root, or the guide lines and branch of a row below one.

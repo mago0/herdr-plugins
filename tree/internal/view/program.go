@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -49,7 +50,10 @@ type Program struct {
 	rows   []Row
 	sel    string
 	cursor int
+	// offset is the first line in view. A row with a repo takes two lines.
 	offset int
+	// menus counts the menu requests, so each one is a new terminal title.
+	menus  int
 	width  int
 	height int
 	placed bool
@@ -179,10 +183,20 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 		p.free = true
 		p.offset += by
 		p.scroll()
+	case tea.MouseButtonRight:
+		i, ok := p.rowAt(m.Y)
+		if !ok || !p.deps.Sidebar {
+			break
+		}
+		target := menuTarget(p.rows[i].Node)
+		if target == "" {
+			break
+		}
+		p.menus++
+		return p, tea.SetWindowTitle(fmt.Sprintf("%s;%s;%d", menuRequest, target, p.menus))
 	case tea.MouseButtonLeft:
-		header, _ := p.chrome()
-		i := p.offset + m.Y - header
-		if m.Y < header || i < 0 || i >= len(p.rows) {
+		i, ok := p.rowAt(m.Y)
+		if !ok {
 			break
 		}
 		p.cursor = i
@@ -196,6 +210,50 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return p, p.jump(r.Node)
 	}
 	return p, nil
+}
+
+// menuRequest starts the terminal title that asks Herdr to open its menu for a row. A pane has
+// no other way to reach the Herdr client that draws it.
+const menuRequest = "herdr-menu"
+
+// menuTarget names what a row stands for on screen, as "<kind>;<id>". A group row has no menu.
+func menuTarget(n *model.Node) string {
+	switch n.Shown {
+	case model.KindWorkspace:
+		return "workspace;" + n.WorkspaceID
+	case model.KindTab:
+		return "tab;" + n.TabID
+	case model.KindPane:
+		return "pane;" + n.ID
+	}
+	return ""
+}
+
+// rowAt returns the row drawn on line y of the pane.
+func (p Program) rowAt(y int) (int, bool) {
+	header, _ := p.chrome()
+	line := p.offset + y - header
+	if y < header || line < 0 {
+		return 0, false
+	}
+	for i, r := range p.rows {
+		if line < r.Height() {
+			return i, true
+		}
+		line -= r.Height()
+	}
+	return 0, false
+}
+
+// span returns the first line of row i and the count of lines of all rows.
+func (p Program) span(i int) (top, total int) {
+	for j, r := range p.rows {
+		if j == i {
+			top = total
+		}
+		total += r.Height()
+	}
+	return top, total
 }
 
 // rebuild recomputes the rows and keeps the cursor on the node it was on.
@@ -223,13 +281,14 @@ func (p *Program) settle() {
 func (p *Program) scroll() {
 	_, chrome := p.chrome()
 	body := max(1, p.height-chrome)
-	if !p.free && p.cursor < p.offset {
-		p.offset = p.cursor
+	top, total := p.span(p.cursor)
+	if !p.free && len(p.rows) > 0 {
+		if bottom := top + p.rows[p.cursor].Height(); bottom > p.offset+body {
+			p.offset = bottom - body
+		}
+		p.offset = min(p.offset, top)
 	}
-	if !p.free && p.cursor >= p.offset+body {
-		p.offset = p.cursor - body + 1
-	}
-	p.offset = max(0, min(p.offset, max(0, len(p.rows)-body)))
+	p.offset = max(0, min(p.offset, max(0, total-body)))
 }
 
 func (p *Program) move(by int) {

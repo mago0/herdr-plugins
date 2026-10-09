@@ -410,3 +410,45 @@ func TestMenuTargetFollowsWhatTheRowShows(t *testing.T) {
 		}
 	}
 }
+
+func places() model.Tree {
+	n := func(id, where string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, Where: where, Children: kids}
+	}
+	return model.Tree{Roots: []*model.Node{n("main", "~/src/flo", n("a", "iam/_worktrees/a"), n("b", "ops/_worktrees/b"))}}
+}
+
+func lastLine(p Program) string {
+	lines := strings.Split(p.View(), "\n")
+	return lines[len(lines)-1]
+}
+
+func hover(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonNone}
+}
+
+func TestSidebarLastLineSaysWhereTheRowWorks(t *testing.T) {
+	f := &fake{tree: places()}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 40, Height: 8})
+	if n := strings.Count(p.View(), "\n") + 1; n != 8 {
+		t.Fatalf("the view is %d lines in a pane of 8, so the last line is not at the bottom", n)
+	}
+	if got := lastLine(p); got != " ~/src/flo" {
+		t.Fatalf("with no pointer the line is for the cursor row, got %q", got)
+	}
+	p = send(t, p, hover(12, 2))
+	if got := lastLine(p); got != " ops/_worktrees/b" {
+		t.Fatalf("the line follows the pointer, got %q", got)
+	}
+	if selected(p) != "main" {
+		t.Fatal("the pointer does not move the cursor")
+	}
+	// The pane gets no event when the pointer leaves it, so a pointer that stops moving lets go.
+	for i := 0; i < hoverTicks; i++ {
+		p = send(t, p, tickMsg{})
+	}
+	if got := lastLine(p); got != " ~/src/flo" {
+		t.Fatalf("a still pointer gives the line back to the cursor row, got %q", got)
+	}
+}

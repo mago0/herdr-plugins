@@ -77,6 +77,9 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
 - The cursor follows the pane that Herdr has in focus.
 - A click on a row jumps to it. A click on the part before the state dot folds a row that has
   children. The wheel scrolls.
+- The last line says where a row works: `<repo>/<path in the repo>` for a linked Git worktree,
+  else the path of the checkout. It is for the row under the pointer, or for the cursor row when
+  the pointer is on no row or has not moved for five seconds.
 - A right-click on a row opens Herdr's menu for what the row shows: the workspace, the tab or
   the pane. The pane names the row in its terminal title (`herdr-menu;<kind>;<id>;<count>`) and
   the fork opens the menu at the pointer.
@@ -93,6 +96,8 @@ A row is one pane that hosts an agent. Terminals have no row.
 - `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
 
 The repository is on a second line under the name, in italics and its own color. A row has that line only when its repository is not the one of the row it hangs from. Rows of one supervisor are in workspace order, then in tab bar order.
+
+A row whose agent works in a linked Git worktree has the worktree glyph after its name. For a workspace row this comes from Herdr. For a tab or pane row it comes from the agent's working directory.
 
 After the name of a root is the ticket key, when every run that agent supervises names the same key.
 
@@ -113,9 +118,10 @@ Two kinds of agent pane are left out and counted in `Hidden (n)`:
 
 ```toml
 [glyphs]
-# The defaults are Nerd Font icons. These two work in any font.
+# The defaults are Nerd Font icons. These three work in any font.
 tab = "⇥"
 pane = "›"
+worktree = "⎇"
 
 [colors]
 blocked = "#f38ba8"

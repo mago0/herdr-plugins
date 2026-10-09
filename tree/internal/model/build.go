@@ -30,6 +30,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 			tree.Hidden = append(tree.Hidden, &Node{
 				ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 				Label: AgentLabel(a), Status: a.Status, Repo: wsByID[a.WorkspaceID].Repo,
+				Where: a.Where, Worktree: a.Worktree,
 			})
 			continue
 		}
@@ -47,6 +48,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 			Label: AgentLabel(a), Status: a.Status, Repo: repo, Ticket: l.ticket[a.PaneID],
+			Where: a.Where, Worktree: a.Worktree,
 			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
 		}
 		if p := l.parent[a.PaneID]; p != "" {
@@ -128,6 +130,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 			if contain(&Node{
 				ID: t.ID, Focus: KindTab, Shown: KindTab, TabID: t.ID, WorkspaceID: t.WorkspaceID,
 				Label: t.Label, Status: t.Status, Repo: nodes[heads[0]].Repo,
+				Where: nodes[heads[0]].Where, Worktree: nodes[heads[0]].Worktree,
 				order: [3]int{w.Number, t.Number, -1},
 			}, heads) {
 				tabRow[t.ID] = t.ID
@@ -158,7 +161,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 		case !occupied[w.ID]:
 			tree.NoAgent = append(tree.NoAgent, &Node{
 				ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
-				Label: w.Label, Status: w.Status, Repo: w.Repo,
+				Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree,
 			})
 		case len(heads) == 1:
 			n := nodes[heads[0]]
@@ -166,7 +169,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 		case len(heads) > 1:
 			contain(&Node{
 				ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
-				Label: w.Label, Status: w.Status, Repo: w.Repo,
+				Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree,
 				order: [3]int{w.Number, -1, -1},
 			}, heads)
 		}

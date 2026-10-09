@@ -14,6 +14,8 @@ type Theme struct {
 	Colors    map[string]string
 	TabGlyph  string
 	PaneGlyph string
+	// WorktreeGlyph marks a row whose agent works in a linked Git worktree.
+	WorktreeGlyph string
 	// RepoColor is the color of the repo line under a row.
 	RepoColor string
 }
@@ -28,8 +30,9 @@ func DefaultTheme() Theme {
 			model.Idle:    "#89b4fa",
 			model.Unknown: "#6c7086",
 		},
-		TabGlyph:  "\U000f04e9",
-		PaneGlyph: "",
+		TabGlyph:      "\U000f04e9",
+		PaneGlyph:     "",
+		WorktreeGlyph: "\ue0a0",
 	}
 }
 
@@ -38,8 +41,9 @@ func LoadTheme(configDir string) Theme {
 	th := DefaultTheme()
 	var file struct {
 		Glyphs struct {
-			Tab  string `toml:"tab"`
-			Pane string `toml:"pane"`
+			Tab      string `toml:"tab"`
+			Pane     string `toml:"pane"`
+			Worktree string `toml:"worktree"`
 		} `toml:"glyphs"`
 		Colors map[string]string `toml:"colors"`
 	}
@@ -54,6 +58,9 @@ func LoadTheme(configDir string) Theme {
 	}
 	if c := file.Colors["repo"]; c != "" {
 		th.RepoColor = c
+	}
+	if file.Glyphs.Worktree != "" {
+		th.WorktreeGlyph = file.Glyphs.Worktree
 	}
 	for state, color := range file.Colors {
 		if _, known := th.Colors[state]; known && color != "" {

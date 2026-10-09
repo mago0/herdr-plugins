@@ -30,6 +30,21 @@ func cut(s string, n int) string {
 	return string(r) + "…"
 }
 
+// cutLeft shortens s to n cells and keeps its end, with an ellipsis in front when it was cut.
+func cutLeft(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r))+1 > n {
+		r = r[1:]
+	}
+	return "…" + string(r)
+}
+
 // Render draws the rows: one line for a row, and a second line for its repo where Row.Repo is set.
 // selected is the index of the row under the cursor, or -1.
 func Render(rows []Row, width, selected int, th Theme) []string {
@@ -55,6 +70,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 			case model.KindPane:
 				glyph = " " + th.PaneGlyph
 			}
+		}
+		if dot && n.Worktree {
+			glyph += " " + th.WorktreeGlyph
 		}
 		tail := 0
 		if right != "" {

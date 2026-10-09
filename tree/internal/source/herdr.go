@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	"github.com/mago0/herdr-plugins/tree/internal/model"
@@ -71,7 +72,10 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Number   int    `json:"number"`
 			Status   string `json:"agent_status"`
 			Worktree *struct {
-				Repo string `json:"repo_name"`
+				Repo     string `json:"repo_name"`
+				Root     string `json:"repo_root"`
+				Checkout string `json:"checkout_path"`
+				Linked   bool   `json:"is_linked_worktree"`
 			} `json:"worktree"`
 		} `json:"workspaces"`
 	}
@@ -92,6 +96,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Name      string `json:"name"`
 			Status    string `json:"agent_status"`
 			Title     string `json:"terminal_title_stripped"`
+			Cwd       string `json:"cwd"`
 		} `json:"agents"`
 	}
 	var panes struct {
@@ -112,6 +117,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 
 	hide := map[string]bool{}
+	home, _ := os.UserHomeDir()
 	var s model.Snapshot
 	for _, p := range panes.Panes {
 		if p.Focused {
@@ -125,6 +131,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		m := model.Workspace{ID: w.ID, Label: w.Label, Number: w.Number, Status: w.Status}
 		if w.Worktree != nil {
 			m.Repo = w.Worktree.Repo
+			m.Where, m.Worktree = where(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, home), w.Worktree.Linked
 		}
 		s.Workspaces = append(s.Workspaces, m)
 	}
@@ -135,9 +142,11 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		s.Tabs = append(s.Tabs, model.Tab{ID: t.ID, WorkspaceID: t.Workspace, Number: place[t.Workspace], Label: t.Label, Status: t.Status})
 	}
 	for _, a := range agents.Agents {
+		main, top, linked := checkout(a.Cwd)
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
+			Where: where(main, top, linked, home), Worktree: linked,
 		})
 	}
 	return s, nil

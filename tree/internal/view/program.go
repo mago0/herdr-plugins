@@ -40,6 +40,8 @@ const (
 	popupHeader = 2
 	popupChrome = popupHeader + 1
 	wheelRows   = 3
+	// hoverTicks is how many ticks a pointer that does not move keeps the last line.
+	hoverTicks = 5
 )
 
 type Program struct {
@@ -52,6 +54,9 @@ type Program struct {
 	cursor int
 	// offset is the first line in view. A row with a repo takes two lines.
 	offset int
+	// hover is the row under the pointer, and still counts the ticks since the pointer moved.
+	hover string
+	still int
 	// menus counts the menu requests, so each one is a new terminal title.
 	menus  int
 	width  int
@@ -94,6 +99,9 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.width, p.height = m.Width, m.Height
 		p.scroll()
 	case tickMsg:
+		if p.still++; p.still >= hoverTicks {
+			p.hover = ""
+		}
 		return p, tea.Batch(p.load(), tick())
 	case loadedMsg:
 		p.err = m.err
@@ -108,6 +116,7 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if p.deps.Sidebar && m.current != "" && m.current != p.current && p.place(m.current, m.currentTab) {
 				p.current = m.current
 				p.free = false
+				p.hover = ""
 			}
 		}
 	case focusedMsg:
@@ -162,15 +171,40 @@ func (p Program) chrome() (header, total int) {
 	if !p.deps.Sidebar {
 		return popupHeader, popupChrome
 	}
+	// The last line says where the row works.
 	if p.err != nil {
-		return 0, 1
+		return 0, 2
 	}
-	return 0, 0
+	return 0, 1
+}
+
+// where is the last line of a sidebar pane: where the row under the pointer works, or the row
+// under the cursor when the pointer is on no row.
+func (p Program) where() string {
+	var n *model.Node
+	for _, r := range p.rows {
+		if p.hover != "" && r.Node.ID == p.hover {
+			n = r.Node
+		}
+	}
+	if n == nil && len(p.rows) > 0 {
+		n = p.rows[p.cursor].Node
+	}
+	if n == nil || n.Where == "" {
+		return ""
+	}
+	return " " + p.theme.paint(cutLeft(n.Where, p.width-1), faint)
 }
 
 // mouse handles a click on a row and the wheel. A click on the part before the state dot
 // folds a row that has children; a click elsewhere on a row jumps to it.
 func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.Action == tea.MouseActionMotion {
+		p.hover, p.still = "", 0
+		if i, ok := p.rowAt(m.Y); ok {
+			p.hover = p.rows[i].Node.ID
+		}
+	}
 	if m.Action != tea.MouseActionPress {
 		return p, nil
 	}
@@ -366,8 +400,11 @@ func (p Program) sidebarView() string {
 	if p.state.Attention && len(lines) == 0 {
 		lines = append(lines, p.theme.paint(" no agent needs attention (a: show all)", faint))
 	}
+	for len(lines) < body {
+		lines = append(lines, "")
+	}
 	if p.err != nil {
 		lines = append(lines, p.theme.paint(cut(" error: "+p.err.Error(), p.width), faint))
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(append(lines, p.where()), "\n")
 }

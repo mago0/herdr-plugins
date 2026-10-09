@@ -10,9 +10,13 @@ const (
 	Unknown = "unknown"
 )
 
+// Workspace is one Herdr workspace. Where says where its checkout is, and Worktree is true when
+// that checkout is a linked Git worktree.
 type Workspace struct {
 	ID, Label, Status, Repo string
 	Number                  int
+	Where                   string
+	Worktree                bool
 }
 
 type Tab struct {
@@ -25,6 +29,9 @@ type Agent struct {
 	PaneID, TabID, WorkspaceID string
 	Name, Kind, Title, Status  string
 	Hide                       bool
+	// Where and Worktree are those of the checkout that holds the agent's working directory.
+	Where    string
+	Worktree bool
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -69,8 +76,11 @@ type Node struct {
 	TabID, WorkspaceID string
 	Label, Status      string
 	Repo, Ticket       string
-	Children           []*Node
-	order              [3]int
+	// Where says where the row's agent works, and Worktree is true for a linked Git worktree.
+	Where    string
+	Worktree bool
+	Children []*Node
+	order    [3]int
 }
 
 // Tree is the built view: supervisors and their workers, then the two folded groups.

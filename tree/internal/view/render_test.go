@@ -10,7 +10,7 @@ import (
 
 func plain() Theme {
 	th := DefaultTheme()
-	th.Plain, th.TabGlyph, th.PaneGlyph = true, "⇥", "›"
+	th.Plain, th.TabGlyph, th.PaneGlyph, th.WorktreeGlyph = true, "⇥", "›", "⎇"
 	return th
 }
 
@@ -116,6 +116,28 @@ func TestRenderRepoBelowTheNameOnlyWhereItChanges(t *testing.T) {
 		"      └─ o other",
 		sp(11) + "ops",
 	})
+}
+
+func TestRenderMarksARowThatWorksInALinkedWorktree(t *testing.T) {
+	worker := &model.Node{ID: "w", Label: "worker", Status: model.Idle, Shown: model.KindTab, Worktree: true}
+	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Worktree: true,
+		Children: []*model.Node{worker, {ID: "m", Label: "main", Status: model.Idle, Shown: model.KindWorkspace}}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 40, -1, plain()), []string{
+		" ▾ o lead ⎇",
+		"   ├─ o worker ⇥ ⎇",
+		"   └─ o main",
+	})
+}
+
+func TestCutLeftKeepsTheEnd(t *testing.T) {
+	for _, c := range []struct {
+		n    int
+		want string
+	}{{40, "iam/_worktrees/review-86"}, {10, "…review-86"}, {1, "…"}, {0, ""}} {
+		if got := cutLeft("iam/_worktrees/review-86", c.n); got != c.want {
+			t.Errorf("cutLeft(%d) = %q, want %q", c.n, got, c.want)
+		}
+	}
 }
 
 func TestRenderNoRows(t *testing.T) {

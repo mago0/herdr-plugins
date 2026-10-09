@@ -79,7 +79,7 @@ func main() {
 	}
 	options := []tea.ProgramOption{tea.WithAltScreen()}
 	if deps.Sidebar {
-		options = append(options, tea.WithMouseCellMotion())
+		options = append(options, tea.WithMouseAllMotion())
 	}
 	if stateDir != "" {
 		deps.Save = func(f map[string]bool, t model.Tree) { view.SaveFolds(stateDir, f, t) }

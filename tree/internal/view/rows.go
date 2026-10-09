@@ -19,14 +19,21 @@ type Row struct {
 	Rollup []string
 	// Repo is the repository shown on a second line: set where it is not the repo of the row above.
 	Repo string
+	// Gap is true for a row with a blank line above it: each root after the first, and the
+	// first of the groups.
+	Gap bool
 }
 
 // Height is the count of lines the row takes on screen.
 func (r Row) Height() int {
+	h := 1
 	if r.Repo != "" {
-		return 2
+		h++
 	}
-	return 1
+	if r.Gap {
+		h++
+	}
+	return h
 }
 
 // State is what the user has set: which rows are folded and whether the attention filter is on.
@@ -92,6 +99,10 @@ func Rows(t model.Tree, st State) []Row {
 		}
 		r := Row{Node: n, Depth: depth, HasChildren: len(kids) > 0, Last: last, Trunk: trunk}
 		r.Folded = r.HasChildren && st.folded(n)
+		if depth == 0 && len(out) > 0 {
+			above := out[len(out)-1]
+			r.Gap = n.Shown != model.KindGroup || above.Depth > 0 || above.Node.Shown != model.KindGroup
+		}
 		if n.Shown != model.KindGroup && n.Repo != above {
 			r.Repo = n.Repo
 		}

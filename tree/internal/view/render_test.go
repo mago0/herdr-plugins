@@ -36,6 +36,7 @@ func TestRenderOpenTree(t *testing.T) {
 		">  │" + sp(4) + "iam",
 		"   └─ o build ⇥",
 		sp(8) + "api",
+		"",
 		" ▸ No agent (2)",
 	})
 }
@@ -149,6 +150,28 @@ func TestRenderTagIsAtTheRightEdgeOfAnyRow(t *testing.T) {
 		" ▾ o lead" + sp(17) + "mine",
 		"   ├─ o a-worker-wit…" + sp(2) + "SRE-923",
 		"   └─ o x" + sp(9) + "a-tag-that-…",
+	})
+}
+
+func TestRenderLeavesABlankLineAboveEachRootAndAboveTheGroups(t *testing.T) {
+	n := func(id string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, Children: kids}
+	}
+	tree := model.Tree{
+		Roots:   []*model.Node{n("one", n("a")), n("two"), n("three")},
+		NoAgent: []*model.Node{n("x")},
+		Hidden:  []*model.Node{n("y")},
+	}
+	same(t, Render(Rows(tree, State{}), 40, 1, plain()), []string{
+		" ▾ o one",
+		">  └─ o a",
+		"",
+		"   o two",
+		"",
+		"   o three",
+		"",
+		" ▸ No agent (1)",
+		" ▸ Hidden (1)",
 	})
 }
 

@@ -61,6 +61,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 	}
 	for i, r := range rows {
 		n := r.Node
+		if r.Gap {
+			lines = append(lines, "")
+		}
 		dot := n.Shown != model.KindGroup
 		glyph, right := "", ""
 		if dot && r.Depth == 0 {

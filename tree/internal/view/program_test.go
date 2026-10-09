@@ -213,3 +213,126 @@ func TestProgramScrolls(t *testing.T) {
 		t.Fatalf("the view is %d lines in a pane of 8", n)
 	}
 }
+
+func sidebar(t *testing.T, f *fake) Program {
+	t.Helper()
+	d := f.deps()
+	d.Sidebar = true
+	return start(t, f, d)
+}
+
+func click(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft}
+}
+
+func TestSidebarStaysOpen(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	for _, k := range []string{"q", "esc"} {
+		if _, cmd := p.Update(key(k)); cmd != nil {
+			t.Fatalf("%s must not close a sidebar pane", k)
+		}
+	}
+	_, cmd := p.Update(key("enter"))
+	if _, quit := p.Update(cmd()); quit != nil {
+		t.Fatal("a jump must not close a sidebar pane")
+	}
+	if len(f.focused) != 1 || f.focused[0] != "lead" {
+		t.Fatalf("focused %v, want [lead]", f.focused)
+	}
+}
+
+func TestSidebarViewIsOnlyRows(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	v := p.View()
+	if strings.Contains(v, "Agents by supervisor") || strings.Contains(v, "close") {
+		t.Fatalf("a sidebar pane has no title or key help:\n%s", v)
+	}
+	if first := strings.SplitN(v, "\n", 2)[0]; !strings.Contains(first, "lead") {
+		t.Fatalf("the first line is the first row, got %q", first)
+	}
+}
+
+func TestSidebarClickJumpsToTheRow(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	next, cmd := p.Update(click(12, 2))
+	p = next.(Program)
+	if selected(p) != "b" {
+		t.Fatalf("selected %q, want b", selected(p))
+	}
+	if cmd == nil {
+		t.Fatal("a click on a row jumps to it")
+	}
+	cmd()
+	if len(f.focused) != 1 || f.focused[0] != "b" {
+		t.Fatalf("focused %v, want [b]", f.focused)
+	}
+}
+
+func TestSidebarClickOnTheFoldMarkFolds(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	next, cmd := p.Update(click(1, 0))
+	p = next.(Program)
+	if cmd != nil || len(f.focused) != 0 {
+		t.Fatal("a click on the fold mark must not jump")
+	}
+	if !p.rows[0].Folded || !f.saved["lead"] {
+		t.Fatalf("the click folds the row, rows:\n%s", show(p.rows))
+	}
+}
+
+func TestSidebarClickBelowTheRowsDoesNothing(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	if _, cmd := p.Update(click(3, 20)); cmd != nil {
+		t.Fatal("a click below the last row does nothing")
+	}
+}
+
+func TestSidebarFollowsTheFocusedPane(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	p = send(t, p, loadedMsg{tree: f.tree, current: "b1"})
+	if selected(p) != "b1" {
+		t.Fatalf("selected %q, want b1", selected(p))
+	}
+	p = send(t, p, key("up"), loadedMsg{tree: f.tree, current: "b1"})
+	if selected(p) != "b" {
+		t.Fatalf("a reload with the same focus keeps the cursor, got %q", selected(p))
+	}
+	p = send(t, p, loadedMsg{tree: f.tree, current: "a"})
+	if selected(p) != "a" {
+		t.Fatalf("selected %q, want a", selected(p))
+	}
+}
+
+func TestSidebarWheelScrollsWithoutMovingTheCursor(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 40, Height: 3},
+		tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelDown})
+	if p.offset == 0 || selected(p) != "lead" {
+		t.Fatalf("offset %d, selected %q", p.offset, selected(p))
+	}
+	if strings.Contains(p.View(), "lead") {
+		t.Fatalf("the first row is scrolled out:\n%s", p.View())
+	}
+	p = send(t, p, tea.MouseMsg{X: 1, Y: 1, Action: tea.MouseActionPress, Button: tea.MouseButtonWheelUp})
+	if p.offset != 0 {
+		t.Fatalf("offset %d after wheel up", p.offset)
+	}
+}
+
+func TestSidebarPlacesTheCursorWhenTheFocusedPaneGetsARow(t *testing.T) {
+	f := &fake{tree: model.Tree{Roots: []*model.Node{node("solo", model.Idle)}}}
+	p := sidebar(t, f)
+	p = send(t, p, loadedMsg{tree: f.tree, current: "late"})
+	grown := model.Tree{Roots: []*model.Node{node("solo", model.Idle), node("late", model.Working)}}
+	p = send(t, p, loadedMsg{tree: grown, current: "late"})
+	if selected(p) != "late" {
+		t.Fatalf("selected %q, want late", selected(p))
+	}
+}

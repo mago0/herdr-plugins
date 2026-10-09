@@ -51,6 +51,28 @@ Use `--placement split` or `tab` for a view that stays open.
 | `a` | Show only agents that are blocked or done, with the rows above them. |
 | `q`, `esc` | Close. |
 
+## As a sidebar section
+
+The [mago0/herdr](https://github.com/mago0/herdr) fork can draw a sidebar section with a plugin
+pane. It draws the spaces section with this plugin by default. To set it yourself:
+
+```toml
+[ui.sidebar.spaces]
+plugin = "herdr-tree:tree"   # "" gives the native spaces list back
+
+[ui.sidebar.agents]
+plugin = ""                  # the agents section takes a plugin the same way
+```
+
+Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in these ways:
+
+- It shows only the rows. Herdr draws the section title.
+- It stays open: `q` and `esc` do nothing, and a jump does not close it.
+- The cursor follows the pane that Herdr has in focus.
+- A click on a row jumps to it. A click on the part before the state dot folds a row that has
+  children. The wheel scrolls.
+- The keys reach it only after the fork's `focus_sidebar` keybind.
+
 ## What a row is
 
 A row is one pane that hosts an agent. Terminals have no row.

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
 
@@ -15,19 +16,30 @@ type Deps struct {
 	Save       func(folds map[string]bool, t model.Tree)
 	OriginPane string
 	OriginTab  string
+	// Sidebar is true when the pane is a section of the Herdr sidebar: it stays open, shows
+	// only rows, and keeps the cursor on the pane Herdr has in focus.
+	Sidebar bool
+	// Current returns the pane and tab Herdr has in focus, as of the last Load.
+	Current func() (pane, tab string)
 }
 
 type (
 	loadedMsg struct {
 		tree model.Tree
 		err  error
+		// current and currentTab are the pane and tab Herdr has in focus.
+		current, currentTab string
 	}
 	focusedMsg struct{ err error }
 	tickMsg    struct{}
 )
 
-// Lines of the view that are not tree rows: title, blank, footer.
-const chrome = 3
+// Lines of a popup view that are not tree rows: title and blank above, footer below.
+const (
+	popupHeader = 2
+	popupChrome = popupHeader + 1
+	wheelRows   = 3
+)
 
 type Program struct {
 	deps   Deps
@@ -41,7 +53,11 @@ type Program struct {
 	width  int
 	height int
 	placed bool
-	err    error
+	// current is the focused pane the cursor last moved to.
+	current string
+	// free is true while the wheel has moved the view away from the cursor.
+	free bool
+	err  error
 }
 
 func New(d Deps, folds map[string]bool, th Theme) Program {
@@ -56,7 +72,11 @@ func (p Program) Init() tea.Cmd { return tea.Batch(p.load(), tick()) }
 func (p Program) load() tea.Cmd {
 	return func() tea.Msg {
 		t, err := p.deps.Load()
-		return loadedMsg{tree: t, err: err}
+		m := loadedMsg{tree: t, err: err}
+		if err == nil && p.deps.Current != nil {
+			m.current, m.currentTab = p.deps.Current()
+		}
+		return m
 	}
 }
 
@@ -78,18 +98,31 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.rebuild()
 			if !p.placed {
 				p.placed = true
-				p.place()
+				p.place(p.deps.OriginPane, p.deps.OriginTab)
+			}
+			// A focused pane with no row yet is tried again on the next load.
+			if p.deps.Sidebar && m.current != "" && m.current != p.current && p.place(m.current, m.currentTab) {
+				p.current = m.current
+				p.free = false
 			}
 		}
 	case focusedMsg:
-		if m.err == nil {
+		if m.err == nil && !p.deps.Sidebar {
 			return p, tea.Quit
 		}
 		p.err = m.err
+		if m.err == nil {
+			return p, nil
+		}
 		return p, p.load()
+	case tea.MouseMsg:
+		return p.mouse(m)
 	case tea.KeyMsg:
 		switch m.String() {
 		case "q", "esc", "ctrl+c":
+			if p.deps.Sidebar {
+				break
+			}
 			return p, tea.Quit
 		case "up", "k":
 			p.move(-1)
@@ -109,9 +142,58 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				p.toggle()
 				break
 			}
-			focus := p.deps.Focus
-			return p, func() tea.Msg { return focusedMsg{err: focus(n)} }
+			return p, p.jump(n)
 		}
+	}
+	return p, nil
+}
+
+func (p Program) jump(n *model.Node) tea.Cmd {
+	focus := p.deps.Focus
+	return func() tea.Msg { return focusedMsg{err: focus(n)} }
+}
+
+// chrome is the count of lines above the rows and of all lines that are not rows.
+func (p Program) chrome() (header, total int) {
+	if !p.deps.Sidebar {
+		return popupHeader, popupChrome
+	}
+	if p.err != nil {
+		return 0, 1
+	}
+	return 0, 0
+}
+
+// mouse handles a click on a row and the wheel. A click on the part before the state dot
+// folds a row that has children; a click elsewhere on a row jumps to it.
+func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if m.Action != tea.MouseActionPress {
+		return p, nil
+	}
+	switch m.Button {
+	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
+		by := wheelRows
+		if m.Button == tea.MouseButtonWheelUp {
+			by = -wheelRows
+		}
+		p.free = true
+		p.offset += by
+		p.scroll()
+	case tea.MouseButtonLeft:
+		header, _ := p.chrome()
+		i := p.offset + m.Y - header
+		if m.Y < header || i < 0 || i >= len(p.rows) {
+			break
+		}
+		p.cursor = i
+		p.free = false
+		p.settle()
+		r := p.rows[i]
+		if r.Node.Shown == model.KindGroup || (r.HasChildren && m.X < 1+lipgloss.Width(lead(r))) {
+			p.toggle()
+			break
+		}
+		return p, p.jump(r.Node)
 	}
 	return p, nil
 }
@@ -139,37 +221,40 @@ func (p *Program) settle() {
 }
 
 func (p *Program) scroll() {
+	_, chrome := p.chrome()
 	body := max(1, p.height-chrome)
-	if p.cursor < p.offset {
+	if !p.free && p.cursor < p.offset {
 		p.offset = p.cursor
 	}
-	if p.cursor >= p.offset+body {
+	if !p.free && p.cursor >= p.offset+body {
 		p.offset = p.cursor - body + 1
 	}
 	p.offset = max(0, min(p.offset, max(0, len(p.rows)-body)))
 }
 
 func (p *Program) move(by int) {
+	p.free = false
 	p.cursor += by
 	p.settle()
 }
 
-// place puts the cursor on the agent the pane was opened from, else on that agent's tab.
-func (p *Program) place() {
+// place puts the cursor on the row of an agent pane, else on a row of that pane's tab.
+func (p *Program) place(pane, tab string) bool {
 	for i, r := range p.rows {
-		if r.Node.ID == p.deps.OriginPane {
+		if r.Node.ID == pane {
 			p.cursor = i
 			p.settle()
-			return
+			return true
 		}
 	}
 	for i, r := range p.rows {
-		if p.deps.OriginTab != "" && r.Node.TabID == p.deps.OriginTab {
+		if tab != "" && r.Node.TabID == tab {
 			p.cursor = i
 			p.settle()
-			return
+			return true
 		}
 	}
+	return false
 }
 
 func (p *Program) toggle() {
@@ -185,6 +270,9 @@ func (p *Program) toggle() {
 }
 
 func (p Program) View() string {
+	if p.deps.Sidebar {
+		return p.sidebarView()
+	}
 	var b strings.Builder
 	title := " Agents by supervisor"
 	if p.state.Attention {
@@ -195,7 +283,7 @@ func (p Program) View() string {
 		b.WriteString("   no agents\n")
 	}
 	lines := Render(p.rows, p.width, p.cursor, p.theme)
-	body := max(1, p.height-chrome)
+	body := max(1, p.height-popupChrome)
 	for _, line := range lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)] {
 		b.WriteString(line + "\n")
 	}
@@ -205,4 +293,22 @@ func (p Program) View() string {
 	}
 	b.WriteString(p.theme.paint(cut(foot, p.width), faint))
 	return b.String()
+}
+
+// sidebarView is the rows alone. Herdr draws the section title, and the keys are not shown.
+func (p Program) sidebarView() string {
+	if len(p.rows) == 0 && p.err == nil {
+		return p.theme.paint(" no agents", faint)
+	}
+	_, chrome := p.chrome()
+	body := max(1, p.height-chrome)
+	lines := Render(p.rows, p.width, p.cursor, p.theme)
+	lines = lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)]
+	if p.state.Attention && len(lines) == 0 {
+		lines = append(lines, p.theme.paint(" no agent needs attention (a: show all)", faint))
+	}
+	if p.err != nil {
+		lines = append(lines, p.theme.paint(cut(" error: "+p.err.Error(), p.width), faint))
+	}
+	return strings.Join(lines, "\n")
 }

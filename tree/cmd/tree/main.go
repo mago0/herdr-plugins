@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sync/atomic"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mago0/herdr-plugins/tree/internal/model"
@@ -25,11 +26,14 @@ func main() {
 		os.Exit(1)
 	}
 	sock := source.Socket{Path: path}
+	// The focused pane and tab of the last snapshot.
+	var current atomic.Pointer[[2]string]
 	load := func() (model.Tree, error) {
 		snap, err := source.Snapshot(sock)
 		if err != nil {
 			return model.Tree{}, err
 		}
+		current.Store(&[2]string{snap.FocusedPane, snap.FocusedTab})
 		return model.Build(snap, source.Dispatch(source.StateDir())), nil
 	}
 	theme := view.LoadTheme(os.Getenv("HERDR_PLUGIN_CONFIG_DIR"))
@@ -64,11 +68,23 @@ func main() {
 		Focus:      func(n *model.Node) error { return source.Focus(sock, n) },
 		OriginPane: origin.Pane,
 		OriginTab:  origin.Tab,
+		// Herdr sets this for a pane it runs as a section of its sidebar.
+		Sidebar: os.Getenv("HERDR_SIDEBAR_SECTION") != "",
+		Current: func() (string, string) {
+			if c := current.Load(); c != nil {
+				return c[0], c[1]
+			}
+			return "", ""
+		},
+	}
+	options := []tea.ProgramOption{tea.WithAltScreen()}
+	if deps.Sidebar {
+		options = append(options, tea.WithMouseCellMotion())
 	}
 	if stateDir != "" {
 		deps.Save = func(f map[string]bool, t model.Tree) { view.SaveFolds(stateDir, f, t) }
 	}
-	if _, err := tea.NewProgram(view.New(deps, folds, theme), tea.WithAltScreen()).Run(); err != nil {
+	if _, err := tea.NewProgram(view.New(deps, folds, theme), options...).Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "tree:", err)
 		os.Exit(1)
 	}

@@ -32,6 +32,8 @@ type Snapshot struct {
 	Workspaces []Workspace
 	Tabs       []Tab
 	Agents     []Agent
+	// FocusedPane and FocusedTab are the pane Herdr has in focus and its tab.
+	FocusedPane, FocusedTab string
 }
 
 // Entry is one dispatch attempt from a run ledger.

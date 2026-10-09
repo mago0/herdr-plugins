@@ -97,8 +97,10 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 	var panes struct {
 		Panes []struct {
-			Pane   string             `json:"pane_id"`
-			Tokens map[string]*string `json:"tokens"`
+			Pane    string             `json:"pane_id"`
+			Tab     string             `json:"tab_id"`
+			Focused bool               `json:"focused"`
+			Tokens  map[string]*string `json:"tokens"`
 		} `json:"panes"`
 	}
 	for _, call := range []struct {
@@ -111,12 +113,15 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 
 	hide := map[string]bool{}
+	var s model.Snapshot
 	for _, p := range panes.Panes {
+		if p.Focused {
+			s.FocusedPane, s.FocusedTab = p.Pane, p.Tab
+		}
 		if v := p.Tokens["tree"]; v != nil && *v == "hide" {
 			hide[p.Pane] = true
 		}
 	}
-	var s model.Snapshot
 	for _, w := range ws.Workspaces {
 		m := model.Workspace{ID: w.ID, Label: w.Label, Number: w.Number, Status: w.Status}
 		if w.Worktree != nil {

@@ -233,12 +233,6 @@ func Build(s Snapshot) Tree {
 	for _, n := range nodes {
 		sort.Slice(n.Children, func(i, j int) bool { return less(n.Children[i], n.Children[j]) })
 	}
-	sort.Slice(tree.Roots, func(i, j int) bool {
-		a, b := tree.Roots[i], tree.Roots[j]
-		if (len(a.Children) > 0) != (len(b.Children) > 0) {
-			return len(a.Children) > 0
-		}
-		return less(a, b)
-	})
+	sort.Slice(tree.Roots, func(i, j int) bool { return less(tree.Roots[i], tree.Roots[j]) })
 	return tree
 }

@@ -66,6 +66,7 @@ func main() {
 	deps := view.Deps{
 		Load:       load,
 		Focus:      func(n *model.Node) error { return source.Focus(sock, n) },
+		Move:       func(workspace, before string) error { return source.Move(sock, workspace, before) },
 		OriginPane: origin.Pane,
 		OriginTab:  origin.Tab,
 		// Herdr sets this for a pane it runs as a section of its sidebar.

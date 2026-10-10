@@ -13,9 +13,11 @@ import (
 
 // Deps is what the pane needs from outside: the tree, the jump, and where folds are kept.
 type Deps struct {
-	Load       func() (model.Tree, error)
-	Focus      func(*model.Node) error
-	Save       func(folds map[string]bool, t model.Tree)
+	Load  func() (model.Tree, error)
+	Focus func(*model.Node) error
+	Save  func(folds map[string]bool, t model.Tree)
+	// Move puts a workspace before another one in Herdr's order, or last when before is "".
+	Move       func(workspace, before string) error
 	OriginPane string
 	OriginTab  string
 	// Sidebar is true when the pane is a section of the Herdr sidebar: it stays open, shows
@@ -44,7 +46,8 @@ type (
 		by        int
 		pane, tab string
 	}
-	tickMsg struct{}
+	movedMsg struct{ err error }
+	tickMsg  struct{}
 )
 
 // Herdr sends these keys to a sidebar pane to move its focus one row down or up the tree.
@@ -60,6 +63,8 @@ const (
 	wheelRows   = 3
 	// hoverTicks is how many ticks a pointer that does not move keeps the last line.
 	hoverTicks = 5
+	// failedTicks is how many ticks the error of a move stays on screen.
+	failedTicks = 5
 )
 
 type Program struct {
@@ -75,6 +80,13 @@ type Program struct {
 	// hover is the row under the pointer, and still counts the ticks since the pointer moved.
 	hover string
 	still int
+	// grab is the row the left button went down on, and dragging is true once the pointer has
+	// left that row with the button down.
+	grab     string
+	dragging bool
+	// failed is the error of the last move, and failedFor counts the ticks it has been shown.
+	failed    error
+	failedFor int
 	// menus counts the menu requests, so each one is a new terminal title.
 	menus  int
 	width  int
@@ -126,6 +138,9 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if p.still++; p.still >= hoverTicks {
 			p.hover = ""
 		}
+		if p.failedFor++; p.failedFor >= failedTicks {
+			p.failed = nil
+		}
 		return p, tea.Batch(p.load(), tick())
 	case loadedMsg:
 		p.err = m.err
@@ -155,6 +170,12 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return p, nil
 		}
 		return p, p.load()
+	case movedMsg:
+		p.failed, p.failedFor = m.err, 0
+		if m.err != nil {
+			return p, nil
+		}
+		return p, p.load()
 	case stepMsg:
 		// The cursor is the start when the last step left it there and the focus did not move.
 		held := m.pane == p.current && p.stepped != "" && p.stepped == p.sel
@@ -175,6 +196,10 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.move(-1)
 		case "down", "j":
 			p.move(1)
+		case "shift+up":
+			return p, p.shift(-1)
+		case "shift+down":
+			return p, p.shift(1)
 		case stepNext:
 			return p.step(1)
 		case stepPrevious:
@@ -279,16 +304,114 @@ func (p Program) chrome() (header, total int) {
 		return popupHeader, popupChrome
 	}
 	// The last line says where the row works.
-	if p.err != nil {
+	if p.shown() != nil {
 		return 0, 2
 	}
 	return 0, 1
+}
+
+// shown is the error on screen: that of the last load or jump, else that of the last move.
+func (p Program) shown() error {
+	if p.err != nil {
+		return p.err
+	}
+	return p.failed
+}
+
+// siblings returns the rows that hang from the same row as row i, from the top. Group rows
+// are not among them.
+func (p Program) siblings(i int) []int {
+	depth := p.rows[i].Depth
+	first := i
+	for first > 0 && p.rows[first-1].Depth >= depth {
+		first--
+	}
+	var out []int
+	for j := first; j < len(p.rows) && p.rows[j].Depth >= depth; j++ {
+		if p.rows[j].Depth == depth && p.rows[j].Node.Shown != model.KindGroup {
+			out = append(out, j)
+		}
+	}
+	return out
+}
+
+// reorder asks Herdr to put a workspace before another one, or last when before is "".
+func (p Program) reorder(workspace, before string) tea.Cmd {
+	move := p.deps.Move
+	if move == nil || workspace == "" || workspace == before {
+		return nil
+	}
+	return func() tea.Msg { return movedMsg{err: move(workspace, before)} }
+}
+
+// shift moves the cursor row one place down or up among its siblings. Rows of one workspace
+// move as one, because the order is that of the workspaces in Herdr.
+func (p Program) shift(by int) tea.Cmd {
+	if len(p.rows) == 0 || p.rows[p.cursor].Node.Shown == model.KindGroup {
+		return nil
+	}
+	own := p.rows[p.cursor].Node.WorkspaceID
+	sibs := p.siblings(p.cursor)
+	at := 0
+	for k, j := range sibs {
+		if j == p.cursor {
+			at = k
+		}
+	}
+	for k := at + by; k >= 0 && k < len(sibs); k += by {
+		other := p.rows[sibs[k]].Node.WorkspaceID
+		if other == "" || other == own {
+			continue
+		}
+		if by < 0 {
+			return p.reorder(own, other)
+		}
+		return p.reorder(other, own)
+	}
+	return nil
+}
+
+// drop moves row from to the place of row to. A row dropped on a row below it goes below that
+// row. A drop on a row deeper in the tree is a drop on the sibling that holds it, and a drop on
+// a row that is no sibling does nothing.
+func (p Program) drop(from, to int) tea.Cmd {
+	depth := p.rows[from].Depth
+	for to > 0 && p.rows[to].Depth > depth {
+		to--
+	}
+	own, target := p.rows[from].Node.WorkspaceID, p.rows[to].Node.WorkspaceID
+	sibs := p.siblings(from)
+	at := -1
+	for k, j := range sibs {
+		if j == to {
+			at = k
+		}
+	}
+	if at < 0 || target == "" || target == own {
+		return nil
+	}
+	if to < from {
+		return p.reorder(own, target)
+	}
+	for _, j := range sibs[at+1:] {
+		if next := p.rows[j].Node.WorkspaceID; next != "" && next != own && next != target {
+			return p.reorder(own, next)
+		}
+	}
+	return p.reorder(own, "")
 }
 
 // where is the last line of a sidebar pane, for the row under the pointer, or the row under the
 // cursor when the pointer is on no row: what a blocked row waits for, else where the row works.
 func (p Program) where() string {
 	var n *model.Node
+	if p.dragging {
+		for _, r := range p.rows {
+			if r.Node.ID == p.grab {
+				return " " + p.theme.paint(cut("move "+r.Node.Label, p.width-1), faint)
+			}
+		}
+	}
 	for _, r := range p.rows {
 		if p.hover != "" && r.Node.ID == p.hover {
 			n = r.Node
@@ -310,18 +433,30 @@ func (p Program) where() string {
 	return " " + p.theme.paint(cutLeft(n.Where, p.width-1), faint)
 }
 
-// mouse handles a click on a row and the wheel. A click on the part before the state dot
-// folds a row that has children; a click elsewhere on a row jumps to it.
+// mouse handles a click on a row, a drag of a row, and the wheel. A press on the part before
+// the state dot folds a row that has children. A press elsewhere on a row jumps to it when the
+// button comes up on that row, and moves the row when it comes up on another one.
 func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.Action == tea.MouseActionMotion {
 		p.hover, p.still = "", 0
-		if i, ok := p.rowAt(m.Y); ok {
+		i, ok := p.rowAt(m.Y)
+		if ok {
 			p.hover = p.rows[i].Node.ID
 		}
+		// Motion with no button down means the button came up outside the pane.
+		if m.Button != tea.MouseButtonLeft {
+			p.grab, p.dragging = "", false
+		} else if p.grab != "" && (!ok || p.rows[i].Node.ID != p.grab) {
+			p.dragging = true
+		}
+	}
+	if m.Action == tea.MouseActionRelease {
+		return p.letGo(m.Y)
 	}
 	if m.Action != tea.MouseActionPress {
 		return p, nil
 	}
+	p.grab, p.dragging = "", false
 	switch m.Button {
 	case tea.MouseButtonWheelUp, tea.MouseButtonWheelDown:
 		by := wheelRows
@@ -355,9 +490,29 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 			p.toggle()
 			break
 		}
-		return p, p.jump(r.Node)
+		p.grab = r.Node.ID
 	}
 	return p, nil
+}
+
+// letGo ends a press on a row when the button comes up on line y.
+func (p Program) letGo(y int) (tea.Model, tea.Cmd) {
+	grab := p.grab
+	p.grab, p.dragging = "", false
+	from := -1
+	for i, r := range p.rows {
+		if grab != "" && r.Node.ID == grab {
+			from = i
+		}
+	}
+	to, ok := p.rowAt(y)
+	if from < 0 || !ok {
+		return p, nil
+	}
+	if to == from {
+		return p, p.jump(p.rows[from].Node)
+	}
+	return p, p.drop(from, to)
 }
 
 // menuRequest starts the terminal title that asks Herdr to open its menu for a row. A pane has
@@ -560,9 +715,9 @@ func (p Program) View() string {
 	for _, line := range lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)] {
 		b.WriteString(line + "\n")
 	}
-	foot := " ↑↓ move  ⏎ jump  ␣ fold  a attention  q close"
-	if p.err != nil {
-		foot = " error: " + p.err.Error()
+	foot := " ↑↓ move  ⇧↑↓ reorder  ⏎ jump  ␣ fold  a attention  q close"
+	if err := p.shown(); err != nil {
+		foot = " error: " + err.Error()
 	}
 	b.WriteString(p.theme.paint(cut(foot, p.width), faint))
 	return b.String()
@@ -583,8 +738,8 @@ func (p Program) sidebarView() string {
 	for len(lines) < body {
 		lines = append(lines, "")
 	}
-	if p.err != nil {
-		lines = append(lines, p.theme.paint(cut(" error: "+p.err.Error(), p.width), faint))
+	if err := p.shown(); err != nil {
+		lines = append(lines, p.theme.paint(cut(" error: "+err.Error(), p.width), faint))
 	}
 	return strings.Join(append(lines, p.where()), "\n")
 }

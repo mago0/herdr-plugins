@@ -206,6 +206,15 @@ func Focus(c Caller, n *model.Node) error {
 	return errors.New("nothing to focus")
 }
 
+// Move puts a workspace before another one in Herdr's order, or last when before is "".
+func Move(c Caller, workspace, before string) error {
+	params := map[string]any{"workspace_ids": []string{workspace}}
+	if before != "" {
+		params["before_workspace_id"] = before
+	}
+	return c.Call("workspace.move_block", params, nil)
+}
+
 // Focused returns the pane Herdr has in focus and its tab. Both are empty when the call fails.
 func Focused(c Caller) (pane, tab string) {
 	var panes struct {

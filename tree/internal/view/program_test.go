@@ -259,7 +259,8 @@ func TestSidebarViewIsOnlyRows(t *testing.T) {
 func TestSidebarClickJumpsToTheRow(t *testing.T) {
 	f := &fake{tree: sample()}
 	p := sidebar(t, f)
-	next, cmd := p.Update(click(12, 2))
+	p = send(t, p, click(12, 2))
+	next, cmd := p.Update(release(12, 2))
 	p = next.(Program)
 	if selected(p) != "b" {
 		t.Fatalf("selected %q, want b", selected(p))
@@ -726,5 +727,174 @@ func TestMenuTitleCarriesNoMoreAnswersThanTheClientShows(t *testing.T) {
 	got := menuTitle(n, 1)
 	if !strings.Contains(got, `["6","a short answer"]`) || strings.Contains(got, `["7",`) {
 		t.Fatalf("want six answers with their whole text, got %s", got)
+	}
+}
+
+func release(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionRelease, Button: tea.MouseButtonLeft}
+}
+
+func drag(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}
+}
+
+// spaces is three roots, one space each. The second has two workers, and the last worker has
+// two tabs of one space.
+func spaces() model.Tree {
+	n := func(id, space string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, WorkspaceID: space, Children: kids}
+	}
+	return model.Tree{
+		Roots: []*model.Node{
+			n("one", "w1"),
+			n("two", "w2", n("x", "w4"), n("y", "w5"), n("z1", "w6"), n("z2", "w6")),
+			n("three", "w3"),
+		},
+		NoAgent: []*model.Node{n("empty", "w7")},
+	}
+}
+
+// mover records each move as "<space><<before>".
+type mover struct {
+	fake
+	moves []string
+	err   error
+}
+
+func (m *mover) start(t *testing.T) Program {
+	t.Helper()
+	m.tree = spaces()
+	d := m.deps()
+	d.Sidebar = true
+	d.Move = func(space, before string) error {
+		m.moves = append(m.moves, space+"<"+before)
+		return m.err
+	}
+	return start(t, &m.fake, d)
+}
+
+// on puts the cursor on a row.
+func on(t *testing.T, p Program, id string) Program {
+	t.Helper()
+	for i, r := range p.rows {
+		if r.Node.ID == id {
+			p.cursor = i
+			p.settle()
+			return p
+		}
+	}
+	t.Fatalf("no row %q", id)
+	return p
+}
+
+func line(t *testing.T, p Program, id string) int {
+	t.Helper()
+	for i, r := range p.rows {
+		if r.Node.ID == id {
+			top, _ := p.span(i)
+			return top + r.Height() - 1
+		}
+	}
+	t.Fatalf("no row %q", id)
+	return 0
+}
+
+func TestMoveKeysMoveARowAmongItsSiblings(t *testing.T) {
+	for _, c := range []struct{ row, key, want string }{
+		{"one", "shift+down", "w2<w1"},
+		{"three", "shift+up", "w3<w2"},
+		{"two", "shift+up", "w2<w1"},
+		{"x", "shift+down", "w5<w4"},
+		{"y", "shift+up", "w5<w4"},
+		// The two tabs of one space move as one: the next sibling is that of another space.
+		{"z2", "shift+up", "w6<w5"},
+		{"y", "shift+down", "w6<w5"},
+	} {
+		m := &mover{}
+		p := on(t, m.start(t), c.row)
+		k := tea.KeyMsg{Type: tea.KeyShiftDown}
+		if c.key == "shift+up" {
+			k = tea.KeyMsg{Type: tea.KeyShiftUp}
+		}
+		run(t, p, k)
+		if len(m.moves) != 1 || m.moves[0] != c.want {
+			t.Errorf("%s on %s moved %v, want [%s]", c.key, c.row, m.moves, c.want)
+		}
+	}
+}
+
+func TestMoveKeysDoNothingAtTheEndsAndOnAGroup(t *testing.T) {
+	for _, c := range []struct{ row, key string }{
+		{"one", "up"}, {"three", "down"}, {"x", "up"}, {"z1", "down"}, {GroupNoAgent, "up"}, {GroupNoAgent, "down"},
+	} {
+		m := &mover{}
+		p := on(t, m.start(t), c.row)
+		k := tea.KeyMsg{Type: tea.KeyShiftDown}
+		if c.key == "up" {
+			k = tea.KeyMsg{Type: tea.KeyShiftUp}
+		}
+		if _, cmd := p.Update(k); cmd != nil || len(m.moves) != 0 {
+			t.Errorf("shift+%s on %s moved %v", c.key, c.row, m.moves)
+		}
+	}
+}
+
+func TestMoveReloadsTheTreeAndShowsAnError(t *testing.T) {
+	m := &mover{err: errors.New("workspace_move_block_failed")}
+	p := on(t, m.start(t), "one")
+	p = run(t, p, tea.KeyMsg{Type: tea.KeyShiftDown})
+	if !strings.Contains(p.View(), "workspace_move_block_failed") {
+		t.Fatalf("the error of a move is shown:\n%s", p.View())
+	}
+}
+
+func TestDragPutsARowWhereItIsDropped(t *testing.T) {
+	for _, c := range []struct{ from, to, want string }{
+		// Down: the row goes below the row it is dropped on.
+		{"one", "two", "w1<w3"},
+		{"one", "three", "w1<"},
+		// A drop on a row deeper in the tree is a drop on the sibling that holds it.
+		{"one", "y", "w1<w3"},
+		// Up: the row takes the place of the row it is dropped on.
+		{"three", "one", "w3<w1"},
+		{"y", "x", "w5<w4"},
+		{"x", "z2", "w4<"},
+	} {
+		m := &mover{}
+		p := m.start(t)
+		from, to := line(t, p, c.from), line(t, p, c.to)
+		p = run(t, p, click(12, from), drag(12, to), release(12, to))
+		if len(m.moves) != 1 || m.moves[0] != c.want {
+			t.Errorf("drag %s to %s moved %v, want [%s]", c.from, c.to, m.moves, c.want)
+		}
+		if len(m.focused) != 0 {
+			t.Errorf("drag %s to %s jumped to %v", c.from, c.to, m.focused)
+		}
+	}
+}
+
+func TestDragToARowThatIsNoSiblingDoesNothing(t *testing.T) {
+	for _, c := range []struct{ from, to string }{{"x", "one"}, {"x", "three"}, {"one", "empty"}, {"z1", "z2"}} {
+		m := &mover{}
+		p := m.start(t)
+		p = send(t, on(t, p, GroupNoAgent), key("space"))
+		from, to := line(t, p, c.from), line(t, p, c.to)
+		p = run(t, p, click(12, from), drag(12, to), release(12, to))
+		if len(m.moves) != 0 || len(m.focused) != 0 {
+			t.Errorf("drag %s to %s moved %v and jumped to %v", c.from, c.to, m.moves, m.focused)
+		}
+	}
+}
+
+func TestDragSaysWhichRowMoves(t *testing.T) {
+	m := &mover{}
+	p := m.start(t)
+	p = send(t, p, click(12, line(t, p, "one")), drag(12, line(t, p, "three")))
+	if got := lastLine(p); !strings.Contains(got, "move one") {
+		t.Fatalf("the last line of a drag is %q", got)
+	}
+	p = send(t, p, release(12, line(t, p, "three")))
+	if got := lastLine(p); strings.Contains(got, "move one") {
+		t.Fatalf("the last line after the drop is %q", got)
 	}
 }

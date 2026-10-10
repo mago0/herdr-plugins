@@ -257,3 +257,18 @@ func TestFocused(t *testing.T) {
 		t.Fatalf("a failed call names no pane, got %q in %q", pane, tab)
 	}
 }
+
+func TestMoveNamesTheWorkspaceItGoesBefore(t *testing.T) {
+	for before, want := range map[string]string{
+		"w1": `{"before_workspace_id":"w1","workspace_ids":["w3"]}`,
+		"":   `{"workspace_ids":["w3"]}`,
+	} {
+		r := &recorder{}
+		if err := Move(r, "w3", before); err != nil {
+			t.Fatal(err)
+		}
+		if r.method != "workspace.move_block" || r.params != want {
+			t.Errorf("Move before %q = %s %s, want %s", before, r.method, r.params, want)
+		}
+	}
+}

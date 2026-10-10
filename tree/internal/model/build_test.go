@@ -203,9 +203,9 @@ func TestBuildRootOrderAndEmpty(t *testing.T) {
 		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", ""), ag("w3:p1", "w3:t1", "")},
 	}
 	check(t, Build(under(s, "w2:p1", "w3:p1")), `
+solo w 
 lead w 
   worker w api
-solo w 
 `)
 	if got := Build(Snapshot{}); len(got.Roots)+len(got.NoAgent)+len(got.Hidden) != 0 {
 		t.Errorf("empty input must give an empty tree, got %+v", got)
@@ -279,4 +279,19 @@ func TestBuildGivesARowTheGitStateOfTheRepoItShows(t *testing.T) {
 	if got["w1:p2"] != (Git{}) {
 		t.Errorf("row in another repo has %+v, want none", got["w1:p2"])
 	}
+}
+
+func TestRootsKeepTheOrderOfTheirWorkspaces(t *testing.T) {
+	// A supervisor does not go above a space that is before it in Herdr.
+	s := under(Snapshot{
+		Workspaces: []Workspace{ws("w1", "solo", "", 1), ws("w2", "lead", "", 2), ws("w3", "worker", "", 3), ws("w4", "new", "", 4)},
+		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1), tab("w3:t1", "1", 1), tab("w4:t1", "1", 1)},
+		Agents:     []Agent{ag("w1:p1", "w1:t1", "a"), ag("w2:p1", "w2:t1", "b"), ag("w3:p1", "w3:t1", "c"), ag("w4:p1", "w4:t1", "d")},
+	}, "w2:p1", "w3:p1")
+	check(t, Build(s), `
+solo w 
+lead w 
+  worker w 
+new w 
+`)
 }

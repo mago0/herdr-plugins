@@ -52,6 +52,7 @@ Use `--placement split` or `tab` for a view that stays open.
 | Key | Action |
 |---|---|
 | `↑` `↓`, `k` `j` | Move. |
+| `shift+↑` `shift+↓` | Move the row one place among the rows beside it. |
 | `enter` | Go to the selected agent and close. On a group, fold or unfold. |
 | `space` | Fold or unfold. A folded row shows one dot for each agent below it. |
 | `a` | Show only agents that are blocked or done, with the rows above them. |
@@ -77,6 +78,9 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
 - The cursor follows the pane that Herdr has in focus.
 - A click on a row jumps to it. A click on the part before the state dot folds a row that has
   children. The wheel scrolls.
+- A drag moves a row among the rows beside it: the row takes the place of the row it is dropped
+  on. The move is that of the row's workspace in Herdr's order (`workspace.move_block`), so
+  Herdr keeps it, and the rows of one workspace move as one. A worker stays under its supervisor.
 - The last line is for the row under the pointer, or for the cursor row when the pointer is on no
   row or has not moved for five seconds. For a blocked row it says what the agent waits for, as
   Herdr reads it from the agent's screen. For any other row it says where the row works:
@@ -112,7 +116,7 @@ A row is one pane that hosts an agent. Terminals have no row.
 - When one agent of such a tab is the only one that supervises workers, the tab's row is that agent. The other panes of the tab are rows under it, with its workers.
 - `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
 
-The repository is on a second line under the name, in italics and its own color. A row has that line only when its checkout is not the one of the row it hangs from: another repository, another linked worktree, or the main checkout under a worktree. Rows of one supervisor are in workspace order, then in tab bar order.
+The repository is on a second line under the name, in italics and its own color. A row has that line only when its checkout is not the one of the row it hangs from: another repository, another linked worktree, or the main checkout under a worktree. The rows are in Herdr's workspace order, then in tab bar order, so a new space is last and a space does not move when its agent starts to supervise.
 
 The state dot of a row is orange (`~` in plain text) when the agent reports working and its screen has not changed for the time Herdr allows (`session.agent_stall_after_secs`, 600 by default). The color is `stalled` under `[colors]`.
 

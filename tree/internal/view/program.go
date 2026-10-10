@@ -390,15 +390,22 @@ const maxMenuTitle = 250
 // minAnswerRunes is the least text an answer keeps when a request is made to fit.
 const minAnswerRunes = 6
 
+// maxMenuAnswers is the most answers a request carries. The Herdr client shows no more.
+const maxMenuAnswers = 6
+
 // answerMenuTitle is the request for the menu of a blocked row, with the answers of its dialog:
 // "herdr-menu2;" and a JSON object. The keys are one letter each to save room: t and i name what
 // the row shows, p is the pane of its agent, l its label, d the dialog, and a the answers as
 // [key, text] pairs. Answer text is cut until the request fits; when it cannot fit, there is none.
 func answerMenuTitle(n *model.Node, pane string) (string, bool) {
 	kind, id, _ := strings.Cut(menuTarget(n), ";")
+	answers := n.Answers
+	if len(answers) > maxMenuAnswers {
+		answers = answers[:maxMenuAnswers]
+	}
 	for limit := model.MaxAnswerRunes; limit >= minAnswerRunes; limit -= 2 {
-		pairs := make([][2]string, len(n.Answers))
-		for i, a := range n.Answers {
+		pairs := make([][2]string, len(answers))
+		for i, a := range answers {
 			pairs[i] = [2]string{a.Key, cut(a.Text, limit)}
 		}
 		var b strings.Builder

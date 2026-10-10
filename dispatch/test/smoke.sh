@@ -47,10 +47,13 @@ rm -f "$T"
 # A worker that an older version placed as a tab shares its supervisor's workspace: release
 # must not remove that workspace.
 L="$ST/runs/smoke/ledger.json"
-jq '. + [{dispatch: "d_tab", attempt: 1, status: "working", agent: "tabbed", placement: "tab", tab_id: "w1:t9",
-          workspace_id: "w1", worktree: "/src/x/_worktrees/t", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+jq '. + [{dispatch: "d_tab", attempt: 1, status: "working", agent: "tabbed", placement: "tab", tab_id: "w-none:t9",
+          workspace_id: "w-none", worktree: "/src/x/_worktrees/t", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
 TD=$("$D" report --run smoke --from tabbed --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
 OUT=$("$D" ack --run smoke --id "$TD" --decision release 2>&1 >/dev/null)
 echo "$OUT" | grep -q "placed as a tab" || fail "release of a tab worker did not refuse: $OUT"
 "$D" show --run smoke --dispatch d_tab | jq -e '.released == null' >/dev/null || fail "a tab worker was marked released"
+"$D" stop --run smoke --dispatch d_tab >/dev/null 2>&1 && fail "stop of a tab worker said it stopped"
+"$D" show --run smoke --dispatch d_tab | jq -e '.status != "stopped"' >/dev/null || fail "a tab worker was marked stopped"
+
 echo "smoke ok"

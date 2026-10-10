@@ -45,6 +45,13 @@ func TestAnswersGivesNoneWhenTheDialogIsNotSafeToAnswerByNumber(t *testing.T) {
 		// a description that holds numbers of its own.
 		"a list cut at its start": {"claude", []string{"1. Safe choice / 2. Also safe", "❯ 3. C", "4. D"}},
 		"two cursor marks":        {"claude", []string{"❯ 1. A", "❯ 2. B"}},
+		// A key is one digit, and the agent may wait for a second digit when it has ten choices.
+		"ten choices": {"claude", []string{"❯ 1. A", "2. B", "3. C", "4. D", "5. E", "6. F", "7. G", "8. H", "9. I", "10. J"}},
+		// A prompt the person sent is drawn with the cursor mark. A dialog with no numbers below
+		// it is not a list of its choices.
+		"a numbered prompt above a dialog": {"claude", []string{"❯ 1. do X", "2. do Y", "Working on it.", "Edit file a.go?", "Yes", "No, exit", "Esc to cancel"}},
+		// Numbered prose and one numbered line far below it are not one list.
+		"numbers far from each other": {"claude", []string{"❯ 1. first step", "2. second step", "a", "b", "c", "3. No, tell Claude"}},
 		// One screen line that holds several numbers is one choice with odd text, not several.
 		"a second list after the choices": {"claude", []string{"❯ 1. A", "2. B", "Notes", "1. first", "2. second"}},
 	} {

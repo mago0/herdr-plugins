@@ -98,24 +98,32 @@ supervise() {  # <pane|agent> [reports]
 }
 
 # Hand one line to Herdr for an agent's pane. Herdr types it at once when that is safe, and holds
-# it while the pane is focused or at a dialog. Status 1 means Herdr knows no such pane.
+# it otherwise. A toast tells a person who is in the pane; an agent that works needs none, because
+# it gets the line when its turn ends. Status 1 means Herdr did not take the line, and
+# DELIVER_ERROR says why.
+DELIVER_ERROR=
 deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
   local out
+  DELIVER_ERROR="no pane"
   [ -n "$1" ] || return 1
-  out=$(herdr agent deliver "$1" "$2" --source dispatch 2>/dev/null) || return 1
-  if [ "$(jq -r '.result.delivery.state // empty' <<<"$out")" = queued ]; then
-    herdr notification show "$3" --body "$4" --sound request >/dev/null 2>&1 || true
-  fi
+  out=$(herdr agent deliver "$1" "$2" --source dispatch 2>&1) || {
+    DELIVER_ERROR=$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)
+    [ -n "$DELIVER_ERROR" ] || DELIVER_ERROR="herdr did not answer"
+    return 1
+  }
+  case "$(jq -r '.result.delivery.held_by // empty' <<<"$out")" in
+    focused|unsent_input) herdr notification show "$3" --body "$4" --sound request >/dev/null 2>&1 || true ;;
+  esac
 }
 supervisor() { cat "$RUN_DIR/supervisor" 2>/dev/null || true; }
 notify_supervisor() {  # <prompt line> <toast title> <toast body>
-  deliver "$(supervisor)" "$@" || echo "dispatch.sh: note: the supervisor pane is gone; the message is in the run inbox" >&2
+  deliver "$(supervisor)" "$@" || echo "dispatch.sh: note: the supervisor was not woken ($DELIVER_ERROR); the message is in the run inbox" >&2
 }
 
 # Tell a worker it has mail. The message is in its inbox either way.
 nudge() {  # <agent> <prompt line>
   deliver "$1" "$2" "dispatch: mail for $1" "$2" && return 0
-  echo "dispatch.sh: note: $1 was not nudged (its pane is gone); the message is in its inbox" >&2
+  echo "dispatch.sh: note: $1 was not nudged ($DELIVER_ERROR); the message is in its inbox" >&2
 }
 
 launch_dispatch() {
@@ -172,7 +180,8 @@ release_worker() {
   # workspace must not be removed for it.
   if [ "$(jq -r '.placement // "workspace"' <<<"$E")" = tab ]; then
     echo "dispatch.sh: warning: $agent was placed as a tab by an older version; nothing removed" >&2
-    echo "dispatch.sh: remove it by hand: herdr tab close $(jq -r '.tab_id // "<tab>"' <<<"$E") && git -C $(jq -r '.worktree // "<worktree>"' <<<"$E") worktree remove $(jq -r '.worktree // "<worktree>"' <<<"$E")" >&2
+    echo "dispatch.sh: remove it by hand. Find its tab with: herdr agent get $agent" >&2
+    echo "dispatch.sh: then: herdr tab close <tab>; git worktree remove $(printf '%q' "$(jq -r '.worktree // "<worktree>"' <<<"$E")")" >&2
     return 0
   fi
   ws=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.workspace_id // empty' || true)
@@ -227,7 +236,7 @@ case "$CMD" in
     if [ -z "$LABEL_SET" ] && [ -n "$(ticket_of "$NAME")" ]; then
       LABEL=$(ticket_of "$NAME"); REST=$(printf '%s' "$NAME" | sed -E 's/^[A-Za-z]{2,6}-[0-9]{1,5}-?//')
       case "$REST" in
-        [A-Za-z]*) echo "dispatch.sh: note: the agent is named $REST and labelled $LABEL (from $NAME); use the agent name in the receipt for later commands" >&2; NAME=$REST ;;
+        [A-Za-z]*) echo "dispatch.sh: note: $LABEL of $NAME is the label and the rest is the agent name; use the agent name in the receipt for later commands, or pass --label \"\" to keep a name whole" >&2; NAME=$REST ;;
       esac
     fi
     for A in "${AFTER[@]+"${AFTER[@]}"}"; do [ -n "$(entry "$A")" ] || die "--after $A: no such dispatch in run $RUN"; done
@@ -386,6 +395,11 @@ case "$CMD" in
     D=; while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; *) die "$CMD: unknown option $1" ;; esac; done
     E=$(entry "$D"); [ -n "$E" ] || die "no dispatch $D in run $RUN"
     AGENT=$(jq -r '.agent // empty' <<<"$E")
+    # Stop removes the worker with its worktree workspace. A worker that an older version placed
+    # as a tab has none of its own, so it cannot be stopped from here.
+    if [ "$CMD" = stop ] && [ "$(jq -r '.placement // "workspace"' <<<"$E")" = tab ]; then
+      die "stop: $AGENT was placed as a tab by an older version. Close its tab by hand, then run: dispatch.sh abandon --dispatch $D"
+    fi
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
     ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" 'map(if .dispatch == $d then .status = $s | .settled = $ts else . end)'
     # An attempt that is closed sends no more reports.
@@ -417,17 +431,18 @@ case "$CMD" in
       [ -f "$LEDGER" ] || continue
       RUN_DIR=$(dirname "$LEDGER"); RUN=$(basename "$RUN_DIR"); SUP=$(supervisor)
       herdr pane get "$SUP" >/dev/null 2>&1 || continue
-      while IFS=$'\t' read -r AGENT STATUS LEDGER_PANE; do
+      while IFS=$'\t' read -r AGENT STATUS LEDGER_PANE STARTED; do
         PANE=$(herdr agent get "$AGENT" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
         # The name must still be on the pane the ledger has. A later run can own the name now.
         [ -n "$PANE" ] && [ "$PANE" = "$LEDGER_PANE" ] && [ "$PANE" != "$SUP" ] || continue
         # A worker that said it is done is not watched, also while that mail waits for its ack.
-        DONE=$(jq -c --arg a "$AGENT" 'select(.from == $a and .type == "worker_done")' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1)
+        # An earlier attempt can have had the same name, so only mail since this one started counts.
+        DONE=$(jq -c --arg a "$AGENT" --arg t "$STARTED" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1 || true)
         if [ "$STATUS" = working ] && [ -z "$DONE" ]; then supervise "$PANE" "$REPORTS"; else supervise "$PANE"; fi
         KEY=$(ticket_of "$AGENT"); [ -n "$KEY" ] || KEY=$(ticket_of "$RUN")
         [ -z "$KEY" ] || [ -n "$(herdr pane get "$PANE" | jq -r '.result.pane.tokens.label // empty')" ] || label_pane "$PANE" "$KEY"
         N=$((N + 1))
-      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.agent, .status, (.pane_id // "")] | @tsv' "$LEDGER")
+      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.agent, .status, (.pane_id // "-"), (.started // "")] | @tsv' "$LEDGER")
     done
     jq -cn --argjson n "$N" '{adopted: $n}'
     ;;
@@ -451,7 +466,7 @@ case "$CMD" in
     # A worker that is done stays linked for the tree and sends no more reports.
     [ "$TYPE" != worker_done ] || supervise "$FROM"
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
-      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160)
+      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
       notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
         "dispatch: $TYPE from $FROM" "$SHORT" ;;
     esac

@@ -717,3 +717,14 @@ func TestMenuTitleFitsThePaneTitleLimit(t *testing.T) {
 		t.Fatalf("an oversize request must fall back, got %d characters", len(got))
 	}
 }
+
+func TestMenuTitleCarriesNoMoreAnswersThanTheClientShows(t *testing.T) {
+	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Dialog: "0123456789abcdef"}
+	for i := 1; i <= 9; i++ {
+		n.Answers = append(n.Answers, model.Answer{Key: fmt.Sprint(i), Text: "a short answer"})
+	}
+	got := menuTitle(n, 1)
+	if !strings.Contains(got, `["6","a short answer"]`) || strings.Contains(got, `["7",`) {
+		t.Fatalf("want six answers with their whole text, got %s", got)
+	}
+}

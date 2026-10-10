@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,6 +129,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 
 	hide := map[string]bool{}
 	tag := map[string]string{}
+	link := map[string]string{}
 	home, _ := os.UserHomeDir()
 	var s model.Snapshot
 	for _, p := range panes.Panes {
@@ -139,6 +141,9 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		}
 		if v := p.Tokens["label"]; v != nil {
 			tag[p.Pane] = strings.TrimSpace(*v)
+		}
+		if v := p.Tokens["link"]; v != nil {
+			link[p.Pane] = webAddress(*v)
 		}
 	}
 	// Herdr names a workspace's repository only where a worktree action recorded it. For the
@@ -185,7 +190,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
-			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane],
+			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane], Link: link[a.Pane],
 			Supervisor: a.Supervisor, Repo: repo, Pending: a.Pending, Stalled: a.Stalled != nil, Blocker: a.Blocker,
 			BlockerLines: a.Lines, Dialog: a.Dialog,
 		})
@@ -204,6 +209,17 @@ func Focus(c Caller, n *model.Node) error {
 		return c.Call("workspace.focus", map[string]string{"workspace_id": n.ID}, nil)
 	}
 	return errors.New("nothing to focus")
+}
+
+// webAddress is s when it is an http or https address with a host, else "". A link is text
+// that any process in a pane can set, and the tree gives it to the program that opens links.
+func webAddress(s string) string {
+	s = strings.TrimSpace(s)
+	u, err := url.Parse(s)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	return s
 }
 
 // Move puts a workspace before another one in Herdr's order, or last when before is "".

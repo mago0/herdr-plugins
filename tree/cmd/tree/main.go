@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"runtime"
 	"sync/atomic"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -67,6 +69,7 @@ func main() {
 		Load:       load,
 		Focus:      func(n *model.Node) error { return source.Focus(sock, n) },
 		Move:       func(workspace, before string) error { return source.Move(sock, workspace, before) },
+		Open:       openLink,
 		OriginPane: origin.Pane,
 		OriginTab:  origin.Tab,
 		// Herdr sets this for a pane it runs as a section of its sidebar.
@@ -90,4 +93,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "tree:", err)
 		os.Exit(1)
 	}
+}
+
+// openLink shows a web address in the user's browser. It does not wait for the browser.
+func openLink(link string) error {
+	opener := "xdg-open"
+	if runtime.GOOS == "darwin" {
+		opener = "open"
+	}
+	cmd := exec.Command(opener, link)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
 }

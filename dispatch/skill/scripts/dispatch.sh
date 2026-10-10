@@ -2,13 +2,14 @@
 # Supervisor front-end for Herdr dispatch: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
-#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>]   bind (create or resume) a run; later commands default to it
+#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>] [--link <url>]   bind (create or resume) a run; later commands default to it
 #                       --wake: mail types that wake the supervisor (default question,escalation,worker_done)
 #                       --label: label of the supervisor's row in the sidebar tree, such as an issue key
 #   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
-#                       [--label <text>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch>]... [-- <agent args>]
+#                       [--label <text>] [--link <url>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch>]... [-- <agent args>]
 #                       --label: label of the worker's row. A name that starts with an issue key
 #                       (sre-142-fix-probes) gives the label SRE-142 and the name fix-probes.
+#                       --link: web address the sidebar tree opens for the row, such as that of the issue
 #   dispatch.sh wait    [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
 #   dispatch.sh read    --id <msg>                               full message JSON
 #   dispatch.sh ack     --id <msg> [--decision reuse|retain|release]   settle; worker_done requires --decision
@@ -89,6 +90,18 @@ label_pane() {  # <pane> <text>
   else herdr pane report-metadata "$1" --source tree --clear-token label >/dev/null 2>&1 || true; fi
 }
 
+# Set the web address that the sidebar tree opens for a pane's row. No address sets nothing.
+link_pane() {  # <pane> <url>
+  [ -n "$1" ] && [ -n "$2" ] || return 0
+  herdr pane report-metadata "$1" --source tree --token "link=$2" >/dev/null 2>&1 || true
+}
+
+# Refuse a link that is not an http or https address.
+check_link() {  # <url>
+  case "$1" in ''|http://?*|https://?*) ;; *) die "--link takes an http or https address" ;; esac
+  case "$1" in *[[:space:]]*) die "--link takes an address with no spaces" ;; esac
+}
+
 # Make the run's supervisor the supervisor of a pane in Herdr. With reports, Herdr tells the
 # supervisor when the worker blocks, stalls or goes away.
 supervise() {  # <pane|agent> [reports]
@@ -154,6 +167,7 @@ launch_dispatch() {
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
   local ag pane; ag=$(jq -r .agent <<<"$receipt"); pane=$(jq -r '.pane_id // empty' <<<"$receipt")
   label_pane "$pane" "$(jq -r '.label // ""' <<<"$spec")"
+  link_pane "$pane" "$(jq -r '.link // ""' <<<"$spec")"
   # A fast worker can report worker_done before the launcher returns; it then gets no reports.
   if [ "$ls" = working ] && [ -z "$(jq -c --arg a "$ag" --arg t "$t0" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$INBOX")" ]; then
     supervise "$pane" "$REPORTS"
@@ -197,8 +211,9 @@ release_worker() {
 
 case "$CMD" in
   run)
-    NAME= WAKE= LABEL= LABEL_SET=
-    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    NAME= WAKE= LABEL= LABEL_SET= LINK=
+    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; --link) LINK=$2; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    check_link "$LINK"
     herdr agent deliveries >/dev/null 2>&1 || die "this Herdr server has no delivery queue: dispatch needs the Herdr build with orchestration support"
     case ",$WAKE," in *[!a-z_,]*) die "run: --wake takes a comma-separated list of mail types" ;; esac
     RUN=${NAME:-run-$(date +%Y%m%d-%H%M%S)}
@@ -213,24 +228,27 @@ case "$CMD" in
       # A run named for an issue labels its supervisor with the key, unless --label says otherwise.
       [ -n "$LABEL_SET" ] || LABEL=$(ticket_of "$RUN")
       [ -z "$LABEL$LABEL_SET" ] || label_pane "$HERDR_PANE_ID" "$LABEL"
+      link_pane "$HERDR_PANE_ID" "$LINK"
     fi
     jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}'
     ;;
 
   start)
     bind_run
-    REPO= BRANCH= NAME= KIND= TASK= BASE= LABEL= LABEL_SET=; AFTER=(); AARGS=()
+    REPO= BRANCH= NAME= KIND= TASK= BASE= LABEL= LABEL_SET= LINK=; AFTER=(); AARGS=()
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo) REPO=$2; shift 2 ;; --branch) BRANCH=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --kind) KIND=$2; shift 2 ;; --task) TASK=$2; shift 2 ;; --base) BASE=$2; shift 2 ;;
         --after) AFTER+=("$2"); shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;;
+        --link) LINK=$2; shift 2 ;;
         --) shift; AARGS=("$@"); break ;;
         *) die "start: unknown option $1" ;;
       esac
     done
     [ -n "$REPO" ] && [ -n "$BRANCH" ] && [ -n "$NAME" ] && [ -r "$TASK" ] || die "start needs --repo, --branch, --name and a readable --task"
     TASK=$(realpath "$TASK")
+    check_link "$LINK"
     # The issue key of a name goes to the label, and the name keeps the description. A name whose
     # rest is not a usable agent name stays whole.
     if [ -z "$LABEL_SET" ] && [ -n "$(ticket_of "$NAME")" ]; then
@@ -243,8 +261,8 @@ case "$CMD" in
     D=$(new_id)
     AARGS_JSON=$(printf '%s\n' "${AARGS[@]+"${AARGS[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     SPEC=$(jq -cn --arg repo "$REPO" --arg branch "$BRANCH" --arg name "$NAME" --arg kind "$KIND" --arg base "$BASE" \
-      --arg task "$TASK" --argjson aargs "$AARGS_JSON" --arg label "$LABEL" \
-      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, agent_args: $aargs, label: $label}')
+      --arg task "$TASK" --argjson aargs "$AARGS_JSON" --arg label "$LABEL" --arg link "$LINK" \
+      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, agent_args: $aargs, label: $label, link: $link}')
     AFTER_JSON=$(printf '%s\n' "${AFTER[@]+"${AFTER[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     ledger_mod --arg d "$D" --arg ts "$(now)" --argjson spec "$SPEC" --argjson after "$AFTER_JSON" \
       '. + [{dispatch: $d, attempt: 1, supersedes: null, after: $after, status: "pending", outcome: null, decision: null,

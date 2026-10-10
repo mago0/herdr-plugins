@@ -17,7 +17,9 @@ type Deps struct {
 	Focus func(*model.Node) error
 	Save  func(folds map[string]bool, t model.Tree)
 	// Move puts a workspace before another one in Herdr's order, or last when before is "".
-	Move       func(workspace, before string) error
+	Move func(workspace, before string) error
+	// Open shows a web address to the user, in the browser.
+	Open       func(link string) error
 	OriginPane string
 	OriginTab  string
 	// Sidebar is true when the pane is a section of the Herdr sidebar: it stays open, shows
@@ -196,6 +198,10 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			p.move(-1)
 		case "down", "j":
 			p.move(1)
+		case "o":
+			if len(p.rows) > 0 {
+				return p, p.open(p.rows[p.cursor].Node)
+			}
 		case "shift+up":
 			return p, p.shift(-1)
 		case "shift+down":
@@ -335,6 +341,16 @@ func (p Program) siblings(i int) []int {
 	return out
 }
 
+// open shows the link of a row. Its error is shown like that of a move.
+func (p Program) open(n *model.Node) tea.Cmd {
+	open := p.deps.Open
+	if open == nil || n.Link == "" {
+		return nil
+	}
+	link := n.Link
+	return func() tea.Msg { return movedMsg{err: open(link)} }
+}
+
 // reorder asks Herdr to put a workspace before another one, or last when before is "".
 func (p Program) reorder(workspace, before string) tea.Cmd {
 	move := p.deps.Move
@@ -433,7 +449,8 @@ func (p Program) where() string {
 	return " " + p.theme.paint(cutLeft(n.Where, p.width-1), faint)
 }
 
-// mouse handles a click on a row, a drag of a row, and the wheel. A press on the part before
+// mouse handles a click on a row, a drag of a row, and the wheel. Ctrl with a click opens the
+// link of a row. A press on the part before
 // the state dot folds a row that has children. A press elsewhere on a row jumps to it when the
 // button comes up on that row, and moves the row when it comes up on another one.
 func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
@@ -489,6 +506,10 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if r.Node.Shown == model.KindGroup || (r.HasChildren && m.X < 1+lipgloss.Width(lead(r))) {
 			p.toggle()
 			break
+		}
+		// Ctrl with a click opens the link of a row that has one.
+		if cmd := p.open(r.Node); m.Ctrl && cmd != nil {
+			return p, cmd
 		}
 		p.grab = r.Node.ID
 	}

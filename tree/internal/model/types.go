@@ -43,6 +43,8 @@ type Agent struct {
 	Git      Git
 	// Tag is the text of the pane's label token, such as a ticket key.
 	Tag string
+	// Link is the web address of the pane's link token, such as that of the ticket.
+	Link string
 	// Supervisor is the pane that supervises this one, or "".
 	Supervisor string
 	// Repo is the repository of the checkout that holds the agent's working directory.
@@ -90,6 +92,8 @@ type Node struct {
 	Git Git
 	// Tag is the label a user or agent set on the row's pane. It is drawn at the right edge.
 	Tag string
+	// Link is the web address that the pane of the row names for its work, or "".
+	Link string
 	// Pending, Stalled and Blocker are those of the row's agent.
 	Pending int
 	Stalled bool

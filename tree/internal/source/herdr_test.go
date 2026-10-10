@@ -272,3 +272,32 @@ func TestMoveNamesTheWorkspaceItGoesBefore(t *testing.T) {
 		}
 	}
 }
+
+func TestSnapshotReadsTheLinkTokenWhenItIsAWebAddress(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"},
+			{"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"},
+			{"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"},
+			{"pane_id":"w1:p4","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"}]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[
+			{"pane_id":"w1:p1","tokens":{"label":"SRE-923","link":" https://example.com/issue/SRE-923 "}},
+			{"pane_id":"w1:p2","tokens":{"link":"file:///etc/passwd"}},
+			{"pane_id":"w1:p3","tokens":{"link":"https://"}},
+			{"pane_id":"w1:p4","tokens":{"link":"-x https://example.com"}}]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agents[0].Link != "https://example.com/issue/SRE-923" {
+		t.Errorf("link = %q", got.Agents[0].Link)
+	}
+	for _, a := range got.Agents[1:] {
+		if a.Link != "" {
+			t.Errorf("%s keeps the link %q, which is no web address", a.PaneID, a.Link)
+		}
+	}
+}

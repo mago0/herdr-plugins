@@ -120,7 +120,7 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		if right != "" {
 			// The text ends at the right edge of the pane, before the dots of a folded row.
 			used := 1 + lipgloss.Width(ld) + dotCells(dot) + lipgloss.Width(label) + lipgloss.Width(glyph)
-			b.WriteString(strings.Repeat(" ", max(2, width-used-tail+2)) + th.paint(right, faint))
+			b.WriteString(strings.Repeat(" ", max(2, width-used-tail+2)) + th.paint(right, tagStyle(n)))
 		}
 		if len(r.Rollup) > 0 {
 			dots := make([]string, len(r.Rollup))
@@ -242,4 +242,12 @@ func dotCells(dot bool) int {
 		return 2
 	}
 	return 0
+}
+
+// tagStyle is the look of a row's tag: underlined when the row has a link to open.
+func tagStyle(n *model.Node) lipgloss.Style {
+	if n.Link != "" {
+		return faint.Underline(true)
+	}
+	return faint
 }

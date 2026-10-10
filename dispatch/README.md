@@ -79,7 +79,7 @@ Requirements:
 
 ## Row labels
 
-Herdr shows a label at the right edge of an agent's row in the sidebar tree. `dispatch.sh start --label SRE-142` sets it on the worker, and `dispatch.sh run --label SRE-142` on the supervisor. A name or a run name that starts with an issue key is split: `sre-142-fix-probes` gives the label `SRE-142` and the agent name `fix-probes`.
+Herdr shows a label at the right edge of an agent's row in the sidebar tree. `dispatch.sh start --label SRE-142` sets it on the worker, and `dispatch.sh run --label SRE-142` on the supervisor. `--link <url>` on either command sets the web address that the tree opens for the row on ctrl+click, such as that of the issue; with no `--link` the row has no link. A name or a run name that starts with an issue key is split: `sre-142-fix-probes` gives the label `SRE-142` and the agent name `fix-probes`.
 
 ## Waking an agent from outside
 

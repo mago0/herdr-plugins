@@ -295,3 +295,12 @@ lead w
 new w 
 `)
 }
+
+func TestBuildKeepsTheLinkOfAnAgent(t *testing.T) {
+	a := ag("w1:p1", "w1:t1", "a")
+	a.Link = "https://example.com/1"
+	got := Build(Snapshot{Workspaces: []Workspace{ws("w1", "one", "", 1)}, Tabs: []Tab{tab("w1:t1", "1", 1)}, Agents: []Agent{a}})
+	if got.Roots[0].Link != a.Link {
+		t.Fatalf("link = %q", got.Roots[0].Link)
+	}
+}

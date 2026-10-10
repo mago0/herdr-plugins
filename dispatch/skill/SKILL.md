@@ -25,6 +25,7 @@ The Herdr server must have delivery queues, supervision links and jobs (`herdr a
 - **Agent kind** - inherited from the calling pane: claude dispatches claude, omp dispatches omp. Pass `--kind` only when the user names a different one. A consumer skill's default never overrides this, and neither does a bare `herdr agent start`: go through `dispatch.sh start` without `--kind`.
 - **Agent name** - a short slug that says what the work is, with no issue key in it: `fix-probe-timeouts`. Consumer skills set their own convention.
 - **Label** - the issue key or other short tag of the work: `--label SRE-142`. Herdr shows it at the right edge of the agent's row. A name that starts with an issue key (`sre-142-fix-probe-timeouts`) is split for you: the key becomes the label and the rest becomes the name. `--label ""` gives no label and keeps the name whole; use it for a name that starts like a key and is not one (`phase-1-cleanup`).
+- **Link** - the web address of the work, when it has one: `--link <url>` with the address of the issue or pull request. The user opens it from the row with ctrl+click. Project instructions say how to build the address from an issue key; with none, pass no link.
 - **Native agent args** - model pins, permission flags. See [Permissions](#permissions).
 
 A task with no repo, or read-only research, does not need a worktree: split a sibling pane and `herdr agent start` there (see the `herdr` skill).
@@ -35,9 +36,9 @@ One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-sl
 
 ```bash
 S=<directory of this SKILL.md>/scripts
-$S/dispatch.sh run --name <slug> [--label <text>] [--wake <types>]   # once per supervising session; later commands default to it
+$S/dispatch.sh run --name <slug> [--label <text>] [--link <url>] [--wake <types>]   # once per supervising session; later commands default to it
 $S/dispatch.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
-  [--label <text>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch-id>]... [-- <native agent args>]
+  [--label <text>] [--link <url>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch-id>]... [-- <native agent args>]
 ```
 
 A run named for an issue (`sre-142-migrate-probes`) labels this pane with the key. `--label` sets another label, and `--label ""` sets none.

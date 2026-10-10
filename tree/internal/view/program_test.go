@@ -898,3 +898,68 @@ func TestDragSaysWhichRowMoves(t *testing.T) {
 		t.Fatalf("the last line after the drop is %q", got)
 	}
 }
+
+// opener records the links the pane opens.
+type opener struct {
+	fake
+	opened []string
+	err    error
+}
+
+func (o *opener) start(t *testing.T) Program {
+	t.Helper()
+	n := func(id, link string) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, WorkspaceID: "w-" + id, Tag: "T-" + id, Link: link}
+	}
+	o.tree = model.Tree{Roots: []*model.Node{n("linked", "https://example.com/1"), n("bare", "")}}
+	d := o.deps()
+	d.Sidebar = true
+	d.Open = func(link string) error {
+		o.opened = append(o.opened, link)
+		return o.err
+	}
+	return start(t, &o.fake, d)
+}
+
+func ctrlClick(x, y int) tea.Msg {
+	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionPress, Button: tea.MouseButtonLeft, Ctrl: true}
+}
+
+func TestCtrlClickOpensTheLinkOfARow(t *testing.T) {
+	o := &opener{}
+	p := o.start(t)
+	y := line(t, p, "linked")
+	run(t, p, ctrlClick(12, y), release(12, y))
+	if len(o.opened) != 1 || o.opened[0] != "https://example.com/1" {
+		t.Fatalf("opened %v", o.opened)
+	}
+	if len(o.focused) != 0 {
+		t.Fatalf("a click that opens a link must not jump, focused %v", o.focused)
+	}
+}
+
+func TestCtrlClickOnARowWithNoLinkIsAClick(t *testing.T) {
+	o := &opener{}
+	p := o.start(t)
+	y := line(t, p, "bare")
+	run(t, p, ctrlClick(12, y), release(12, y))
+	if len(o.opened) != 0 || len(o.focused) != 1 || o.focused[0] != "bare" {
+		t.Fatalf("opened %v, focused %v", o.opened, o.focused)
+	}
+}
+
+func TestOKeyOpensTheLinkOfTheCursorRow(t *testing.T) {
+	o := &opener{err: errors.New("no browser")}
+	p := o.start(t)
+	p = run(t, p, key("o"))
+	if len(o.opened) != 1 || o.opened[0] != "https://example.com/1" {
+		t.Fatalf("opened %v", o.opened)
+	}
+	if !strings.Contains(p.View(), "no browser") {
+		t.Fatalf("the error of an open is shown:\n%s", p.View())
+	}
+	o.opened = nil
+	if _, cmd := on(t, p, "bare").Update(key("o")); cmd != nil || len(o.opened) != 0 {
+		t.Fatalf("a row with no link opens nothing, opened %v", o.opened)
+	}
+}

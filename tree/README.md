@@ -53,6 +53,7 @@ Use `--placement split` or `tab` for a view that stays open.
 |---|---|
 | `↑` `↓`, `k` `j` | Move. |
 | `shift+↑` `shift+↓` | Move the row one place among the rows beside it. |
+| `o` | Open the link of the row in the browser, when the row has one. |
 | `enter` | Go to the selected agent and close. On a group, fold or unfold. |
 | `space` | Fold or unfold. A folded row shows one dot for each agent below it. |
 | `a` | Show only agents that are blocked or done, with the rows above them. |
@@ -78,6 +79,10 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
 - The cursor follows the pane that Herdr has in focus.
 - A click on a row jumps to it. A click on the part before the state dot folds a row that has
   children. The wheel scrolls.
+- Ctrl with a click opens the link of a row in the browser. A row has a link when its pane sets
+  the `link` token to an `http` or `https` address
+  (`herdr pane report-metadata <pane> --source tree --token link=<url>`), and its label is then
+  underlined. The tree does not know what the address is for: an issue, a pull request, a run.
 - A drag moves a row among the rows beside it: the row takes the place of the row it is dropped
   on. The move is that of the row's workspace in Herdr's order (`workspace.move_block`), so
   Herdr keeps it, and the rows of one workspace move as one. A worker stays under its supervisor.

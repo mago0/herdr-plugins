@@ -38,7 +38,7 @@ func Build(s Snapshot) Tree {
 			tree.Hidden = append(tree.Hidden, &Node{
 				ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 				Label: AgentLabel(a), Status: a.Status, Repo: wsByID[a.WorkspaceID].Repo,
-				Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, wsByID[a.WorkspaceID].Repo), Tag: a.Tag,
+				Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, wsByID[a.WorkspaceID].Repo), Tag: a.Tag, Link: a.Link,
 			})
 			continue
 		}
@@ -59,7 +59,7 @@ func Build(s Snapshot) Tree {
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 			Label: AgentLabel(a), Status: a.Status, Repo: repo,
-			Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, repo), Tag: a.Tag,
+			Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link,
 			Pending: a.Pending, Stalled: a.Stalled, Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
 			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
 		}

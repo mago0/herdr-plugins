@@ -660,3 +660,34 @@ func TestStepKeysAreTheBytesHerdrSends(t *testing.T) {
 		t.Fatalf("read %v, want %v", got, want)
 	}
 }
+
+func TestSidebarLastLineSaysWhatABlockedRowWaitsFor(t *testing.T) {
+	blocked := &model.Node{ID: "b", Label: "b", Status: model.Blocked, Shown: model.KindWorkspace,
+		Where: "ops/_worktrees/b", Blocker: "Do you want to run this command? / 1. Yes / 2. No"}
+	idle := &model.Node{ID: "i", Label: "i", Status: model.Idle, Shown: model.KindWorkspace,
+		Where: "~/src/flo", Blocker: "left over"}
+	f := &fake{tree: model.Tree{Roots: []*model.Node{blocked, idle}}}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 40, Height: 8})
+	if got := lastLine(p); got != " Do you want to run this command? / 1. …" {
+		t.Fatalf("a blocked row shows what it waits for, got %q", got)
+	}
+	p = send(t, p, key("j"))
+	if got := lastLine(p); got != " ~/src/flo" {
+		t.Fatalf("a row that is not blocked shows where it works, got %q", got)
+	}
+}
+
+func TestMenuTitleCarriesTheAnswersOfABlockedRow(t *testing.T) {
+	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Tag: "SRE-9",
+		Answers: []model.Answer{{Key: "1", Text: "Yes"}, {Key: "2", Text: `No "thanks"`}}}
+	want := `herdr-menu2;{"kind":"workspace","id":"w1","agent_pane":"w1:p1","label":"SRE-9","answers":[{"key":"1","text":"Yes"},{"key":"2","text":"No \"thanks\""}]}`
+	if got := menuTitle(n, 1); got != want {
+		t.Fatalf("title = %s\nwant    %s", got, want)
+	}
+	// A row that holds several agents names no pane, so it can carry no answers.
+	n.Focus = model.KindWorkspace
+	if got := menuTitle(n, 2); got != "herdr-menu;workspace;w1;2;;SRE-9" {
+		t.Fatalf("title = %s", got)
+	}
+}

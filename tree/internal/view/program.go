@@ -1,6 +1,7 @@
 package view
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -284,8 +285,8 @@ func (p Program) chrome() (header, total int) {
 	return 0, 1
 }
 
-// where is the last line of a sidebar pane: where the row under the pointer works, or the row
-// under the cursor when the pointer is on no row.
+// where is the last line of a sidebar pane, for the row under the pointer, or the row under the
+// cursor when the pointer is on no row: what a blocked row waits for, else where the row works.
 func (p Program) where() string {
 	var n *model.Node
 	for _, r := range p.rows {
@@ -296,7 +297,14 @@ func (p Program) where() string {
 	if n == nil && len(p.rows) > 0 {
 		n = p.rows[p.cursor].Node
 	}
-	if n == nil || n.Where == "" {
+	if n == nil {
+		return ""
+	}
+	// What a blocked agent waits for is more urgent than where it works.
+	if n.Status == model.Blocked && n.Blocker != "" {
+		return " " + p.theme.paint(cut(n.Blocker, p.width-1), faint)
+	}
+	if n.Where == "" {
 		return ""
 	}
 	return " " + p.theme.paint(cutLeft(n.Where, p.width-1), faint)
@@ -356,6 +364,9 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 // no other way to reach the Herdr client that draws it.
 const menuRequest = "herdr-menu"
 
+// answerMenuRequest starts the title form that is JSON and can carry the answers of a dialog.
+const answerMenuRequest = "herdr-menu2"
+
 // menuTitle is the request for the menu of a row. Its last two parts are the pane of the row's
 // agent and the label that pane has, which Herdr needs to set a label. The pane is empty for a
 // row that holds several agents.
@@ -364,7 +375,31 @@ func menuTitle(n *model.Node, count int) string {
 	if n.Focus == model.KindPane {
 		pane = n.ID
 	}
+	if pane != "" && len(n.Answers) > 0 {
+		if title, ok := answerMenuTitle(n, pane); ok {
+			return title
+		}
+	}
 	return fmt.Sprintf("%s;%s;%d;%s;%s", menuRequest, menuTarget(n), count, pane, n.Tag)
+}
+
+// answerMenuTitle is the request for the menu of a blocked row, with the answers of its dialog.
+func answerMenuTitle(n *model.Node, pane string) (string, bool) {
+	kind, id, _ := strings.Cut(menuTarget(n), ";")
+	var b strings.Builder
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	err := enc.Encode(struct {
+		Kind    string         `json:"kind"`
+		ID      string         `json:"id"`
+		Pane    string         `json:"agent_pane"`
+		Label   string         `json:"label"`
+		Answers []model.Answer `json:"answers"`
+	}{kind, id, pane, n.Tag, n.Answers})
+	if err != nil {
+		return "", false
+	}
+	return answerMenuRequest + ";" + strings.TrimSpace(b.String()), true
 }
 
 // menuTarget names what a row stands for on screen, as "<kind>;<id>". A group row has no menu.

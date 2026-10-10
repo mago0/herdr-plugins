@@ -67,9 +67,6 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		}
 		dot := n.Shown != model.KindGroup
 		glyph, right := "", ""
-		if dot && r.Depth == 0 {
-			right = n.Ticket
-		}
 		if dot && n.Tag != "" {
 			right = cut(n.Tag, maxTag)
 		}
@@ -84,6 +81,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		// The repo line carries the mark of a linked worktree. A row with no repo keeps it here.
 		if dot && n.Worktree && n.Repo == "" {
 			glyph += " " + th.WorktreeGlyph
+		}
+		if dot && n.Pending > 0 {
+			glyph += " " + th.pending(n.Pending)
 		}
 		tail := 0
 		if right != "" {
@@ -109,7 +109,7 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		var b strings.Builder
 		b.WriteString(mark + th.paint(ld, faint))
 		if dot {
-			b.WriteString(th.dot(n.Status) + " ")
+			b.WriteString(th.dot(state(n)) + " ")
 		}
 		if r.Depth == 0 && dot {
 			b.WriteString(th.paint(label, bold))
@@ -140,6 +140,14 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		}
 	}
 	return lines
+}
+
+// state is the state a row's dot shows: a working agent whose screen stands still is stalled.
+func state(n *model.Node) string {
+	if n.Stalled && n.Status == model.Working {
+		return Stalled
+	}
+	return n.Status
 }
 
 // repoLine is the text under a row: the repo with its branch and its distance from the upstream,

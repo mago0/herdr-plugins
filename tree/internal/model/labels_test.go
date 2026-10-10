@@ -20,32 +20,3 @@ func TestAgentLabel(t *testing.T) {
 		}
 	}
 }
-
-func TestTicketKey(t *testing.T) {
-	cases := map[string]string{
-		"abc-923-soak":        "ABC-923",
-		"ops-12":              "OPS-12",
-		"review-20261009":     "",
-		"abc-review-20261009": "",
-		"cleanup":             "",
-		"x-1":                 "",
-	}
-	for in, want := range cases {
-		if got := TicketKey(in); got != want {
-			t.Errorf("TicketKey(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestWorktreeRepo(t *testing.T) {
-	cases := map[string]string{
-		"/src/api/_worktrees/abc-1-fix": "api",
-		"/src/api":                      "",
-		"":                              "",
-	}
-	for in, want := range cases {
-		if got := WorktreeRepo(in); got != want {
-			t.Errorf("WorktreeRepo(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

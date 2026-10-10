@@ -99,6 +99,11 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Status    string `json:"agent_status"`
 			Title     string `json:"terminal_title_stripped"`
 			Cwd       string `json:"cwd"`
+			// Set by a Herdr server that supervises agents; an older server leaves them out.
+			Supervisor string `json:"supervisor_pane_id"`
+			Pending    int    `json:"pending_deliveries"`
+			Stalled    *int   `json:"stalled_secs"`
+			Blocker    string `json:"blocker"`
 		} `json:"agents"`
 	}
 	var panes struct {
@@ -171,10 +176,15 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 	for _, a := range agents.Agents {
 		main, top, linked := checkout(a.Cwd)
+		repo := ""
+		if main != "" {
+			repo = filepath.Base(main)
+		}
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
 			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane],
+			Supervisor: a.Supervisor, Repo: repo, Pending: a.Pending, Stalled: a.Stalled != nil, Blocker: a.Blocker,
 		})
 	}
 	return s, nil

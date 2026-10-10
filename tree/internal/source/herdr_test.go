@@ -217,6 +217,29 @@ func TestSnapshotReadsTheLabelToken(t *testing.T) {
 	}
 }
 
+func TestSnapshotReadsWhatHerdrKnowsAboutSupervision(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude","pending_deliveries":2},
+			{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent":"claude","agent_status":"blocked",
+			 "supervisor_pane_id":"w1:p1","stalled_secs":640,"blocker":"Allow? / 1. Yes"}]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lead, worker := got.Agents[0], got.Agents[1]
+	if lead.Pending != 2 || lead.Supervisor != "" || lead.Stalled || lead.Blocker != "" {
+		t.Fatalf("lead = %+v", lead)
+	}
+	if worker.Supervisor != "w1:p1" || !worker.Stalled || worker.Blocker != "Allow? / 1. Yes" || worker.Pending != 0 {
+		t.Fatalf("worker = %+v", worker)
+	}
+}
+
 func TestFocused(t *testing.T) {
 	s := serve(t, map[string]string{
 		"pane.list": `{"id":"tree","result":{"panes":[

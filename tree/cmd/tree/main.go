@@ -34,7 +34,7 @@ func main() {
 			return model.Tree{}, err
 		}
 		current.Store(&[2]string{snap.FocusedPane, snap.FocusedTab})
-		return model.Build(snap, source.Dispatch(source.StateDir())), nil
+		return model.Build(snap), nil
 	}
 	theme := view.LoadTheme(os.Getenv("HERDR_PLUGIN_CONFIG_DIR"))
 	stateDir := os.Getenv("HERDR_PLUGIN_STATE_DIR")

@@ -1,12 +1,16 @@
 package view
 
 import (
+	"fmt"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
+
+// Stalled is the dot state of a working agent whose screen does not change.
+const Stalled = "stalled"
 
 // Theme is how states and row kinds are drawn. Plain draws with no color, for tests and scripts.
 type Theme struct {
@@ -18,6 +22,8 @@ type Theme struct {
 	WorktreeGlyph string
 	// RepoColor is the color of the repo line under a row.
 	RepoColor string
+	// PendingGlyph stands before the count of prompts Herdr holds for a row.
+	PendingGlyph string
 }
 
 // DefaultTheme uses Nerd Font glyphs for tab and pane rows.
@@ -29,10 +35,12 @@ func DefaultTheme() Theme {
 			model.Done:    "#a6e3a1",
 			model.Idle:    "#89b4fa",
 			model.Unknown: "#6c7086",
+			Stalled:       "#fab387",
 		},
 		TabGlyph:      "\U000f04e9",
 		PaneGlyph:     "",
 		WorktreeGlyph: "\ue0a0",
+		PendingGlyph:  "\uf0e0",
 	}
 }
 
@@ -44,6 +52,7 @@ func LoadTheme(configDir string) Theme {
 			Tab      string `toml:"tab"`
 			Pane     string `toml:"pane"`
 			Worktree string `toml:"worktree"`
+			Pending  string `toml:"pending"`
 		} `toml:"glyphs"`
 		Colors map[string]string `toml:"colors"`
 	}
@@ -62,6 +71,9 @@ func LoadTheme(configDir string) Theme {
 	if file.Glyphs.Worktree != "" {
 		th.WorktreeGlyph = file.Glyphs.Worktree
 	}
+	if file.Glyphs.Pending != "" {
+		th.PendingGlyph = file.Glyphs.Pending
+	}
 	for state, color := range file.Colors {
 		if _, known := th.Colors[state]; known && color != "" {
 			th.Colors[state] = color
@@ -71,7 +83,15 @@ func LoadTheme(configDir string) Theme {
 }
 
 var plainDots = map[string]string{
-	model.Blocked: "!", model.Working: "*", model.Done: "+", model.Idle: "o",
+	model.Blocked: "!", model.Working: "*", model.Done: "+", model.Idle: "o", Stalled: "~",
+}
+
+// pending is the mark for prompts Herdr holds for a row, with their count.
+func (th Theme) pending(n int) string {
+	if th.Plain {
+		return fmt.Sprintf("+%d", n)
+	}
+	return fmt.Sprintf("%s %d", th.PendingGlyph, n)
 }
 
 func (th Theme) dot(status string) string {

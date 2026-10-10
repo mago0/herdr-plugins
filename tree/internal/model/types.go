@@ -43,6 +43,16 @@ type Agent struct {
 	Git      Git
 	// Tag is the text of the pane's label token, such as a ticket key.
 	Tag string
+	// Supervisor is the pane that supervises this one, or "".
+	Supervisor string
+	// Repo is the repository of the checkout that holds the agent's working directory.
+	Repo string
+	// Pending counts the prompts Herdr holds for this pane until it is safe to type them.
+	Pending int
+	// Stalled is true when the agent reports working and its screen does not change.
+	Stalled bool
+	// Blocker is what a blocked agent waits for, when Herdr knows it.
+	Blocker string
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -52,23 +62,6 @@ type Snapshot struct {
 	Agents     []Agent
 	// FocusedPane and FocusedTab are the pane Herdr has in focus and its tab.
 	FocusedPane, FocusedTab string
-}
-
-// Entry is one dispatch attempt from a run ledger.
-type Entry struct {
-	PaneID, TabID, WorkspaceID, Worktree, Created string
-}
-
-// Run is one dispatch run: the pane that supervises it and the workers it started.
-type Run struct {
-	Name, Supervisor string
-	Entries          []Entry
-}
-
-// Dispatch is the dispatch plugin's state. Tracked holds the panes of loops it tracks.
-type Dispatch struct {
-	Runs    []Run
-	Tracked map[string]bool
 }
 
 type Kind int
@@ -86,14 +79,20 @@ type Node struct {
 	Focus, Shown       Kind
 	TabID, WorkspaceID string
 	Label, Status      string
-	Repo, Ticket       string
+	Repo               string
 	// Where says where the row's agent works, and Worktree is true for a linked Git worktree.
 	Where    string
 	Worktree bool
 	// Git is set when the row works in the main checkout of Repo.
 	Git Git
 	// Tag is the label a user or agent set on the row's pane. It is drawn at the right edge.
-	Tag      string
+	Tag string
+	// Pending, Stalled and Blocker are those of the row's agent.
+	Pending int
+	Stalled bool
+	Blocker string
+	// Answers are the choices of the dialog a blocked agent shows, when one key picks each.
+	Answers  []Answer
 	Children []*Node
 	order    [3]int
 }

@@ -47,8 +47,30 @@ func ag(pane, tabID, name string) Agent {
 	return Agent{PaneID: pane, TabID: tabID, WorkspaceID: strings.Split(pane, ":")[0], Name: name, Status: Idle}
 }
 
-func run(name, sup string, entries ...Entry) Run {
-	return Run{Name: name, Supervisor: sup, Entries: entries}
+// under sets the supervisor of each named pane.
+func under(s Snapshot, supervisor string, panes ...string) Snapshot {
+	agents := append([]Agent(nil), s.Agents...)
+	for i := range agents {
+		for _, p := range panes {
+			if agents[i].PaneID == p {
+				agents[i].Supervisor = supervisor
+			}
+		}
+	}
+	s.Agents = agents
+	return s
+}
+
+// in sets the repository of the checkout a pane works in.
+func in(s Snapshot, pane, repo string) Snapshot {
+	agents := append([]Agent(nil), s.Agents...)
+	for i := range agents {
+		if agents[i].PaneID == pane {
+			agents[i].Repo = repo
+		}
+	}
+	s.Agents = agents
+	return s
 }
 
 func TestBuildWorkspaceWorkersAndNoAgent(t *testing.T) {
@@ -57,17 +79,12 @@ func TestBuildWorkspaceWorkersAndNoAgent(t *testing.T) {
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1), tab("w3:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", "add-routes")},
 	}
-	d := Dispatch{Runs: []Run{run("abc-5-m0", "w1:p1",
-		Entry{PaneID: "w2:p1", WorkspaceID: "w2", Worktree: "/src/infra/_worktrees/x", Created: "1"})}}
-	got := Build(s, d)
+	got := Build(under(s, "w1:p1", "w2:p1"))
 	check(t, got, `
 migration w 
   add-routes w infra
 noagent infra
 `)
-	if got.Roots[0].Ticket != "ABC-5" {
-		t.Errorf("root ticket = %q", got.Roots[0].Ticket)
-	}
 	if got.Roots[0].Focus != KindPane || got.Roots[0].ID != "w1:p1" {
 		t.Errorf("a row that stands for a workspace still focuses its agent pane: %+v", got.Roots[0])
 	}
@@ -79,10 +96,9 @@ func TestBuildTabWorkerUnderSupervisor(t *testing.T) {
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w1:t3", "build-images", 3), tab("w1:t4", "add-nodepools", 4)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", "s"), ag("w1:p6", "w1:t3", "a"), ag("w1:p7", "w1:t4", "b")},
 	}
-	d := Dispatch{Runs: []Run{run("r", "w1:p1",
-		Entry{PaneID: "w1:p6", TabID: "w1:t3", WorkspaceID: "w1", Worktree: "/src/scheduler/_worktrees/a", Created: "1"},
-		Entry{PaneID: "w1:p7", TabID: "w1:t4", WorkspaceID: "w1", Worktree: "/src/infra/_worktrees/b", Created: "1"})}}
-	check(t, Build(s, d), `
+	// A worker in a tab of its supervisor's workspace shows the repository of its own checkout.
+	s = in(under(s, "w1:p1", "w1:p6", "w1:p7"), "w1:p7", "infra")
+	check(t, Build(s), `
 scheduler w scheduler
   build-images t scheduler
   add-nodepools t infra
@@ -96,11 +112,7 @@ func TestBuildTwoSupervisingTabs(t *testing.T) {
 		Agents: []Agent{ag("w1:p1", "w1:t1", ""), ag("w1:p5", "w1:t9", ""),
 			ag("w2:p1", "w2:t1", "review-86"), ag("w3:p1", "w3:t1", "add-probe")},
 	}
-	d := Dispatch{Runs: []Run{
-		run("reviews", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"}),
-		run("plan", "w1:p5", Entry{PaneID: "w3:p1", WorkspaceID: "w3", Created: "1"}),
-	}}
-	got := Build(s, d)
+	got := Build(under(under(s, "w1:p1", "w2:p1"), "w1:p5", "w3:p1"))
 	check(t, got, `
 ops w ops
   monitor t ops
@@ -119,9 +131,8 @@ func TestBuildTheOneSupervisorOfATabStandsForIt(t *testing.T) {
 		Tabs:       []Tab{tab("w1:t1", "planning", 1), tab("w2:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", "left"), ag("w1:p2", "w1:t1", "right"), ag("w2:p1", "w2:t1", "add-probe")},
 	}
-	d := Dispatch{Runs: []Run{run("r", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"})}}
 	// The other pane of the tab hangs under the supervisor, with its workers.
-	check(t, Build(s, d), `
+	check(t, Build(under(s, "w1:p1", "w2:p1")), `
 ops w ops
   right p ops
   add-probe w api
@@ -135,18 +146,14 @@ func TestBuildATabWithNoSupervisorOrSeveralHoldsItsPanes(t *testing.T) {
 		Agents: []Agent{ag("w1:p1", "w1:t1", "left"), ag("w1:p2", "w1:t1", "right"),
 			ag("w2:p1", "w2:t1", "a"), ag("w3:p1", "w3:t1", "b")},
 	}
-	check(t, Build(s, Dispatch{}), `
+	check(t, Build(s), `
 ops w ops
   left p ops
   right p ops
 a w api
 b w api
 `)
-	d := Dispatch{Runs: []Run{
-		run("r1", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"}),
-		run("r2", "w1:p2", Entry{PaneID: "w3:p1", WorkspaceID: "w3", Created: "1"}),
-	}}
-	check(t, Build(s, d), `
+	check(t, Build(under(under(s, "w1:p1", "w2:p1"), "w1:p2", "w3:p1")), `
 ops w ops
   left p ops
     a w api
@@ -155,15 +162,14 @@ ops w ops
 `)
 }
 
-func TestBuildDispatchedTabWithSecondAgent(t *testing.T) {
+func TestBuildWorkerTabWithSecondAgent(t *testing.T) {
 	// A worker's tab gains a second agent: the tab row stays under the supervisor and holds both.
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "add-probe", "api", 2)},
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", "worker"), ag("w2:p2", "w2:t1", "helper")},
 	}
-	d := Dispatch{Runs: []Run{run("r", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"})}}
-	check(t, Build(s, d), `
+	check(t, Build(under(s, "w1:p1", "w2:p1")), `
 ops w ops
   add-probe w api
     worker p api
@@ -172,18 +178,19 @@ ops w ops
 }
 
 func TestBuildHiddenPanes(t *testing.T) {
-	hide := ag("w1:p3", "w1:t1", "waker")
-	hide.Hide = true
+	hidden := func(pane, tabID, name string) Agent {
+		a := ag(pane, tabID, name)
+		a.Hide = true
+		return a
+	}
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "loops", "ops", 2)},
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1)},
-		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), ag("w1:p2", "w1:t1", "pr-watch"), hide, ag("w2:p1", "w2:t1", "probe")},
+		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), hidden("w1:p3", "w1:t1", "waker"), hidden("w2:p1", "w2:t1", "probe")},
 	}
-	d := Dispatch{Tracked: map[string]bool{"w1:p2": true, "w2:p1": true}}
-	check(t, Build(s, d), `
+	check(t, Build(s), `
 ops w ops
 noagent loops
-hidden pr-watch
 hidden waker
 hidden probe
 `)
@@ -195,13 +202,12 @@ func TestBuildRootOrderAndEmpty(t *testing.T) {
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1), tab("w3:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", ""), ag("w3:p1", "w3:t1", "")},
 	}
-	d := Dispatch{Runs: []Run{run("r", "w2:p1", Entry{PaneID: "w3:p1", WorkspaceID: "w3", Created: "1"})}}
-	check(t, Build(s, d), `
+	check(t, Build(under(s, "w2:p1", "w3:p1")), `
 lead w 
   worker w api
 solo w 
 `)
-	if got := Build(Snapshot{}, Dispatch{}); len(got.Roots)+len(got.NoAgent)+len(got.Hidden) != 0 {
+	if got := Build(Snapshot{}); len(got.Roots)+len(got.NoAgent)+len(got.Hidden) != 0 {
 		t.Errorf("empty input must give an empty tree, got %+v", got)
 	}
 }
@@ -214,11 +220,7 @@ func TestBuildHeadsOfDifferentSupervisorsStayApart(t *testing.T) {
 		Agents: []Agent{ag("w1:p1", "w1:t1", ""), ag("w2:p1", "w2:t1", ""),
 			ag("w3:p1", "w3:t1", "x"), ag("w3:p2", "w3:t2", "y")},
 	}
-	d := Dispatch{Runs: []Run{
-		run("ra", "w1:p1", Entry{PaneID: "w3:p1", TabID: "w3:t1", WorkspaceID: "w3", Created: "1"}),
-		run("rb", "w2:p1", Entry{PaneID: "w3:p2", TabID: "w3:t2", WorkspaceID: "w3", Created: "1"}),
-	}}
-	check(t, Build(s, d), `
+	check(t, Build(under(under(s, "w1:p1", "w3:p1"), "w2:p1", "w3:p2")), `
 a w 
   one t api
 b w 
@@ -227,16 +229,12 @@ b w
 }
 
 func TestBuildContainerCycleKeepsEveryAgent(t *testing.T) {
-	// A worker's own run reaches back into its supervisor's tab. No agent may drop out of the tree.
+	// A worker supervises a pane in its own supervisor's tab. No agent may drop out of the tree.
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "ops", 1), ws("w2", "worker", "api", 2)},
 		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1)},
 		Agents:     []Agent{ag("w1:p1", "w1:t1", "lead"), ag("w1:p2", "w1:t1", "side"), ag("w2:p1", "w2:t1", "w")},
 	}
-	d := Dispatch{Runs: []Run{
-		run("r1", "w1:p1", Entry{PaneID: "w2:p1", WorkspaceID: "w2", Created: "1"}),
-		run("r2", "w2:p1", Entry{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Created: "1"}),
-	}}
 	seen := map[string]bool{}
 	var walk func(nodes []*Node)
 	walk = func(nodes []*Node) {
@@ -245,7 +243,7 @@ func TestBuildContainerCycleKeepsEveryAgent(t *testing.T) {
 			walk(n.Children)
 		}
 	}
-	got := Build(s, d)
+	got := Build(under(under(s, "w1:p1", "w2:p1"), "w2:p1", "w1:p2"))
 	walk(got.Roots)
 	for _, pane := range []string{"w1:p1", "w1:p2", "w2:p1"} {
 		if !seen[pane] {
@@ -274,7 +272,7 @@ func TestBuildGivesARowTheGitStateOfTheRepoItShows(t *testing.T) {
 			walk(n.Children)
 		}
 	}
-	walk(Build(s, Dispatch{}).Roots)
+	walk(Build(s).Roots)
 	if want := (Git{Repo: "flosports", Branch: "main", Ahead: 1}); got["w1:p1"] != want {
 		t.Errorf("row in its repo has %+v, want %+v", got["w1:p1"], want)
 	}

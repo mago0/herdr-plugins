@@ -10,8 +10,8 @@ func of(g Git, repo string) Git {
 	return g
 }
 
-// Build turns the live Herdr state and the dispatch state into the supervisor tree.
-func Build(s Snapshot, d Dispatch) Tree {
+// Build turns the live Herdr state into the supervisor tree.
+func Build(s Snapshot) Tree {
 	workspaces := append([]Workspace(nil), s.Workspaces...)
 	sort.SliceStable(workspaces, func(i, j int) bool { return workspaces[i].Number < workspaces[j].Number })
 	wsByID := map[string]Workspace{}
@@ -34,7 +34,7 @@ func Build(s Snapshot, d Dispatch) Tree {
 	var tree Tree
 	var visible []Agent
 	for _, a := range s.Agents {
-		if a.Hide || d.Tracked[a.PaneID] {
+		if a.Hide {
 			tree.Hidden = append(tree.Hidden, &Node{
 				ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 				Label: AgentLabel(a), Status: a.Status, Repo: wsByID[a.WorkspaceID].Repo,
@@ -45,22 +45,23 @@ func Build(s Snapshot, d Dispatch) Tree {
 		visible = append(visible, a)
 	}
 
-	l := resolveLinks(visible, d)
 	nodes := map[string]*Node{}
-	up := map[string]string{}
+	up := resolveLinks(visible)
 	for i, a := range visible {
-		repo := l.repo[a.PaneID]
+		repo := a.Repo
 		if repo == "" {
 			repo = wsByID[a.WorkspaceID].Repo
 		}
+		var answers []Answer
+		if a.Status == Blocked {
+			answers = Answers(a.Kind, a.Blocker)
+		}
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
-			Label: AgentLabel(a), Status: a.Status, Repo: repo, Ticket: l.ticket[a.PaneID],
+			Label: AgentLabel(a), Status: a.Status, Repo: repo,
 			Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, repo), Tag: a.Tag,
+			Pending: a.Pending, Stalled: a.Stalled, Blocker: a.Blocker, Answers: answers,
 			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
-		}
-		if p := l.parent[a.PaneID]; p != "" {
-			up[a.PaneID] = p
 		}
 	}
 

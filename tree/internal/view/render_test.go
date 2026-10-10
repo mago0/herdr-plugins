@@ -26,7 +26,7 @@ func same(t *testing.T, got, want []string) {
 func TestRenderOpenTree(t *testing.T) {
 	review := &model.Node{ID: "r", Label: "review-86", Status: model.Done, Repo: "iam", Shown: model.KindWorkspace}
 	build := &model.Node{ID: "b", Label: "build", Status: model.Idle, Repo: "api", Shown: model.KindTab}
-	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Ticket: "ABC-1", Shown: model.KindWorkspace,
+	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Tag: "ABC-1", Shown: model.KindWorkspace,
 		Children: []*model.Node{review, build}}
 	tree := model.Tree{Roots: []*model.Node{ops}, NoAgent: []*model.Node{{ID: "x", Label: "x"}, {ID: "y", Label: "y"}}}
 	got := Render(Rows(tree, State{}), 40, 1, plain())
@@ -42,7 +42,7 @@ func TestRenderOpenTree(t *testing.T) {
 }
 
 func TestRenderFoldedParentShowsDescendantDots(t *testing.T) {
-	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Ticket: "ABC-1", Shown: model.KindWorkspace,
+	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Tag: "ABC-1", Shown: model.KindWorkspace,
 		Children: []*model.Node{
 			{ID: "a", Label: "a", Status: model.Done},
 			{ID: "b", Label: "b", Status: model.Blocked},
@@ -78,7 +78,7 @@ func TestRenderGuideLines(t *testing.T) {
 }
 
 func TestRenderNarrowAndWide(t *testing.T) {
-	long := &model.Node{ID: "l", Label: "a-very-long-workspace-label-that-does-not-fit", Status: model.Idle, Ticket: "ABC-12345",
+	long := &model.Node{ID: "l", Label: "a-very-long-workspace-label-that-does-not-fit", Status: model.Idle, Tag: "ABC-12345",
 		Children: []*model.Node{{ID: "c", Label: "日本語のラベルは幅が広い", Status: model.Done, Repo: "repository"}}}
 	rows := Rows(model.Tree{Roots: []*model.Node{long}}, State{})
 	for _, width := range []int{0, 1, 5, 10, 24, 60} {
@@ -144,7 +144,7 @@ func TestCutLeftKeepsTheEnd(t *testing.T) {
 func TestRenderTagIsAtTheRightEdgeOfAnyRow(t *testing.T) {
 	worker := &model.Node{ID: "w", Label: "a-worker-with-a-long-name", Status: model.Idle, Shown: model.KindWorkspace, Tag: "SRE-923"}
 	long := &model.Node{ID: "x", Label: "x", Status: model.Idle, Shown: model.KindWorkspace, Tag: "a-tag-that-is-too-long"}
-	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Ticket: "ABC-1", Tag: "mine",
+	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Tag: "mine",
 		Children: []*model.Node{worker, long}}
 	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 30, -1, plain()), []string{
 		" ▾ o lead" + sp(17) + "mine",
@@ -179,6 +179,26 @@ func TestRenderNoRows(t *testing.T) {
 	if got := Render(nil, 40, 0, plain()); len(got) != 0 {
 		t.Fatalf("no rows, got %q", got)
 	}
+}
+
+func TestRenderShowsHeldPromptsAndAStalledAgent(t *testing.T) {
+	waiting := &model.Node{ID: "w", Label: "worker", Status: model.Idle, Shown: model.KindWorkspace, Pending: 2, Tag: "SRE-1"}
+	stuck := &model.Node{ID: "s", Label: "stuck", Status: model.Working, Shown: model.KindWorkspace, Stalled: true}
+	lead := &model.Node{ID: "l", Label: "lead", Status: model.Working, Shown: model.KindWorkspace, Pending: 1,
+		Children: []*model.Node{waiting, stuck}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 30, -1, plain()), []string{
+		" ▾ * lead +1",
+		"   ├─ o worker +2" + sp(8) + "SRE-1",
+		"   └─ ~ stuck",
+	})
+}
+
+func TestRenderAStalledDotOnlyForAWorkingAgent(t *testing.T) {
+	// Herdr clears the stall when the state changes; a row that is not working never shows it.
+	done := &model.Node{ID: "d", Label: "done", Status: model.Done, Shown: model.KindWorkspace, Stalled: true}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{done}}, State{}), 30, -1, plain()), []string{
+		"   + done",
+	})
 }
 
 func TestRenderRepoLineSaysTheBranchOrMarksALinkedWorktree(t *testing.T) {

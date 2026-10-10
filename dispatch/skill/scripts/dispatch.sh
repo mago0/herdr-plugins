@@ -2,11 +2,13 @@
 # Supervisor front-end for Herdr dispatch: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
-#   dispatch.sh run     [--name <slug>] [--wake <types>]        bind (create or resume) a run; later commands default to it
+#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>]   bind (create or resume) a run; later commands default to it
 #                       --wake: mail types that wake the supervisor (default question,escalation,worker_done)
+#                       --label: label of the supervisor's row in the sidebar tree, such as an issue key
 #   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
-#                       [--kind <herdr kind>] [--base <ref>] [--tab] [--after <dispatch>]... [-- <agent args>]
-#                       --tab: new tab in the caller's workspace instead of a workspace of its own
+#                       [--label <text>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch>]... [-- <agent args>]
+#                       --label: label of the worker's row. A name that starts with an issue key
+#                       (sre-142-fix-probes) gives the label SRE-142 and the name fix-probes.
 #   dispatch.sh wait    [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
 #   dispatch.sh read    --id <msg>                               full message JSON
 #   dispatch.sh ack     --id <msg> [--decision reuse|retain|release]   settle; worker_done requires --decision
@@ -20,21 +22,23 @@
 #   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
 #                       worker side: mail the supervisor, and wake it for the run's wake types
 #   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
-#                       type one line into the supervisor (or --to) from any process; exit 3 = held
-#   dispatch.sh track   --pane <id> --name <label> [--notify <agent|pane>]
-#                       tell the supervisor (or --notify) if this pane exits or closes
+#                       type one line into the supervisor (or --to) from any process; exit 3 = no such agent
+#   dispatch.sh adopt                                            link the live workers of every run to their
+#                       supervisor in Herdr and label them; for runs started before Herdr kept the links
 #
 # Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
 # Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
 # <run>/workers/<agent>/inbox.jsonl (supervisor -> worker).
-# Pane index: <state>/agent-dispatch/panes.json, pane id -> {run, role, agent, supervisor, pending}.
+# Herdr holds the rest: who supervises which pane, the wake lines that wait for a safe moment, and
+# the reports of a blocked, stalled or gone worker.
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 MAIL="$HERE/mail.sh"
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dispatch"
 RUNS="$STATE/runs"
-INDEX="$STATE/panes.json"
+# What Herdr reports to a supervisor about a worker that has not finished.
+REPORTS=blocked,exited,stalled
 POINTER="$STATE/current-run${HERDR_PANE_ID:+.${HERDR_PANE_ID//:/_}}"
 
 die() { echo "dispatch.sh: $*" >&2; exit 1; }
@@ -75,51 +79,43 @@ deps_met() {
     | .[] | select(.dispatch == $d) | ((.after // []) | all(. as $a | $ok | any(. == $a)))' "$LEDGER")" = true ]
 }
 
-# index_mod [jq args...] '<filter over the object>'  -- atomic read-modify-write of the pane index.
-index_mod() {
-  mkdir -p "$STATE"
-  ( flock 9
-    [ -s "$INDEX" ] || echo '{}' >"$INDEX"
-    TMP=$(mktemp "$INDEX.XXXXXX"); jq "$@" "$INDEX" >"$TMP" && mv "$TMP" "$INDEX"
-  ) 9>"$INDEX.lock"
-}
-index_worker() {  # <agent>: (re)index the pane that hosts a worker of this run
-  local pane; pane=$(herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
-  [ -n "$pane" ] || return 0
-  index_mod --arg p "$pane" --arg r "$RUN" --arg a "$1" --arg s "$(cat "$RUN_DIR/supervisor" 2>/dev/null || true)" \
-    '.[$p] = {run: $r, role: "worker", agent: $a, supervisor: $s}'
-}
-unindex_worker() {  # <agent>
-  index_mod --arg r "$RUN" --arg a "$1" 'with_entries(select((.value.role == "worker" and .value.run == $r and .value.agent == $a) | not))'
-}
-set_pending() {  # <supervisor pane> <true|false>
-  index_mod --arg p "$1" --argjson v "$2" 'if .[$p] then .[$p].pending = $v else . end'
+# The issue key at the start of a name, upper case, or nothing: sre-142-fix-probes -> SRE-142.
+ticket_of() { printf '%s' "$1" | sed -nE 's/^([A-Za-z]{2,6})-([0-9]{1,5})(-.*)?$/\1-\2/p' | tr '[:lower:]' '[:upper:]'; }
+
+# Set or clear the label of a pane's row in the sidebar tree.
+label_pane() {  # <pane> <text>
+  [ -n "$1" ] || return 0
+  if [ -n "$2" ]; then herdr pane report-metadata "$1" --source tree --token "label=$2" >/dev/null 2>&1 || true
+  else herdr pane report-metadata "$1" --source tree --clear-token label >/dev/null 2>&1 || true; fi
 }
 
-# Type one line into an agent's pane when that is safe. A focused pane may hold a half-typed
-# draft and a blocked or unknown one may hold a dialog: those get a toast or nothing, and status 1.
+# Make the run's supervisor the supervisor of a pane in Herdr. With reports, Herdr tells the
+# supervisor when the worker blocks, stalls or goes away.
+supervise() {  # <pane|agent> [reports]
+  local sup; sup=$(supervisor)
+  [ -n "$1" ] && [ -n "$sup" ] || return 0
+  herdr pane supervise "$1" --by "$sup" ${2:+--report "$2"} >/dev/null 2>&1 || true
+}
+
+# Hand one line to Herdr for an agent's pane. Herdr types it at once when that is safe, and holds
+# it while the pane is focused or at a dialog. Status 1 means Herdr knows no such pane.
 deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
-  local info
+  local out
   [ -n "$1" ] || return 1
-  info=$(herdr agent get "$1" 2>/dev/null) || return 1
-  if [ "$(jq -r '.result.agent.focused // false' <<<"$info")" = true ]; then
+  out=$(herdr agent deliver "$1" "$2" --source dispatch 2>/dev/null) || return 1
+  if [ "$(jq -r '.result.delivery.state // empty' <<<"$out")" = queued ]; then
     herdr notification show "$3" --body "$4" --sound request >/dev/null 2>&1 || true
-    return 1
   fi
-  case "$(jq -r '.result.agent.agent_status // "unknown"' <<<"$info")" in blocked|unknown) return 1 ;; esac
-  herdr agent prompt "$1" "$2" >/dev/null 2>&1
 }
 supervisor() { cat "$RUN_DIR/supervisor" 2>/dev/null || true; }
-# Mail wake: a held line is marked pending, and the plugin's hook delivers it later.
 notify_supervisor() {  # <prompt line> <toast title> <toast body>
-  local sup; sup=$(supervisor)
-  deliver "$sup" "$@" || set_pending "$sup" true
+  deliver "$(supervisor)" "$@" || echo "dispatch.sh: note: the supervisor pane is gone; the message is in the run inbox" >&2
 }
 
-# Tell a worker it has mail. The message is in its inbox either way, so a held nudge loses nothing.
+# Tell a worker it has mail. The message is in its inbox either way.
 nudge() {  # <agent> <prompt line>
   deliver "$1" "$2" "dispatch: mail for $1" "$2" && return 0
-  echo "dispatch.sh: note: $1 was not nudged (pane focused, at a dialog, or gone); the message is in its inbox" >&2
+  echo "dispatch.sh: note: $1 was not nudged (its pane is gone); the message is in its inbox" >&2
 }
 
 launch_dispatch() {
@@ -132,7 +128,6 @@ launch_dispatch() {
   # No kind in the spec means inherit the caller's: the launcher resolves it.
   local kind; kind=$(jq -r '.kind // ""' <<<"$spec"); [ -z "$kind" ] || args+=(--kind "$kind")
   local base; base=$(jq -r '.base // ""' <<<"$spec"); [ -z "$base" ] || args+=(--base "$base")
-  [ "$(jq -r '.tab // false' <<<"$spec")" != true ] || args+=(--tab)
   local aargs=(); while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]?' <<<"$spec")
   [ ${#aargs[@]} -eq 0 ] || args+=(-- "${aargs[@]}")
 
@@ -147,13 +142,15 @@ launch_dispatch() {
   ledger_mod --arg d "$D" --arg ts "$(now)" --arg ls "$ls" --argjson r "$receipt" \
     'map(if .dispatch == $d then . + {launch: (.launch + {kind: $r.kind}),
           status: $ls, started: $ts, agent: $r.agent,
-          placement: ($r.placement // "workspace"), tab_id: $r.tab_id,
           workspace_id: $r.workspace_id, pane_id: $r.pane_id, worktree: $r.worktree, branch: $r.branch,
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
-  # A fast worker can report worker_done before the launcher returns; do not index it again.
-  local ag; ag=$(jq -r .agent <<<"$receipt")
+  local ag pane; ag=$(jq -r .agent <<<"$receipt"); pane=$(jq -r '.pane_id // empty' <<<"$receipt")
+  label_pane "$pane" "$(jq -r '.label // ""' <<<"$spec")"
+  # A fast worker can report worker_done before the launcher returns; it then gets no reports.
   if [ "$ls" = working ] && [ -z "$(jq -c --arg a "$ag" --arg t "$t0" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$INBOX")" ]; then
-    index_worker "$ag"
+    supervise "$pane" "$REPORTS"
+  else
+    supervise "$pane"
   fi
   jq -c --arg d "$D" '. + {dispatch: $d}' <<<"$receipt"
   return $rc
@@ -170,8 +167,6 @@ launch_ready() {
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
 release_worker() {
   local agent=$1 D=$2 ws out
-  unindex_worker "$agent"
-  if [ "$(entry "$D" | jq -r '.placement // "workspace"')" = tab ]; then release_tab_worker "$agent" "$D"; return 0; fi
   ws=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.workspace_id // empty' || true)
   [ -n "$ws" ] || ws=$(entry "$D" | jq -r '.workspace_id // empty')
   [ -n "$ws" ] || { echo "dispatch.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0; }
@@ -183,34 +178,11 @@ release_worker() {
   fi
 }
 
-# Tab placement: herdr does not own the worktree, so check it is clean, close the tab (kills the
-# agent), then remove the worktree with git. The branch stays, as with `herdr worktree remove`.
-release_tab_worker() {
-  local agent=$1 D=$2 E tab wt root out
-  E=$(entry "$D")
-  tab=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.tab_id // empty' || true)
-  [ -n "$tab" ] || tab=$(jq -r '.tab_id // empty' <<<"$E")
-  wt=$(jq -r '.worktree // empty' <<<"$E")
-  [ -n "$wt" ] || { echo "dispatch.sh: warning: no worktree known for $agent; nothing removed" >&2; return 0; }
-  if [ -d "$wt" ] && [ -n "$(git -C "$wt" status --porcelain 2>/dev/null)" ]; then
-    echo "dispatch.sh: warning: release of $agent refused: dirty_worktree_requires_force ($wt)" >&2
-    echo "dispatch.sh: inspect the worktree, then: herdr tab close ${tab:-<tab>} && git -C $wt worktree remove --force $wt" >&2
-    return 0
-  fi
-  [ -z "$tab" ] || herdr tab close "$tab" >/dev/null 2>&1 || echo "dispatch.sh: warning: could not close tab $tab" >&2
-  if [ -d "$wt" ]; then
-    root=$(dirname "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)")
-    if ! out=$(git -C "$root" worktree remove "$wt" 2>&1); then
-      echo "dispatch.sh: warning: release of $agent failed: $out" >&2; return 0
-    fi
-  fi
-  ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .released = $ts else . end)'
-}
-
 case "$CMD" in
   run)
-    NAME= WAKE=
-    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    NAME= WAKE= LABEL= LABEL_SET=
+    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    herdr agent deliveries >/dev/null 2>&1 || die "this Herdr server has no delivery queue: dispatch needs the Herdr build with orchestration support"
     case ",$WAKE," in *[!a-z_,]*) die "run: --wake takes a comma-separated list of mail types" ;; esac
     RUN=${NAME:-run-$(date +%Y%m%d-%H%M%S)}
     RUN=$(printf '%s' "$RUN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')
@@ -221,31 +193,38 @@ case "$CMD" in
     [ -z "$WAKE" ] || echo "$WAKE" >"$RUN_DIR/wake-types"
     if [ -n "${HERDR_PANE_ID:-}" ]; then
       echo "$HERDR_PANE_ID" >"$RUN_DIR/supervisor"
-      index_mod --arg p "$HERDR_PANE_ID" --arg r "$RUN" '.[$p] = {run: $r, role: "supervisor", pending: false}'
+      # A run named for an issue labels its supervisor with the key, unless --label says otherwise.
+      [ -n "$LABEL_SET" ] || LABEL=$(ticket_of "$RUN")
+      [ -z "$LABEL$LABEL_SET" ] || label_pane "$HERDR_PANE_ID" "$LABEL"
     fi
     jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}'
     ;;
 
   start)
     bind_run
-    REPO= BRANCH= NAME= KIND= TASK= BASE= TAB=false; AFTER=(); AARGS=()
+    REPO= BRANCH= NAME= KIND= TASK= BASE= LABEL= LABEL_SET=; AFTER=(); AARGS=()
     while [ $# -gt 0 ]; do
       case "$1" in
         --repo) REPO=$2; shift 2 ;; --branch) BRANCH=$2; shift 2 ;; --name) NAME=$2; shift 2 ;;
         --kind) KIND=$2; shift 2 ;; --task) TASK=$2; shift 2 ;; --base) BASE=$2; shift 2 ;;
-        --after) AFTER+=("$2"); shift 2 ;; --tab) TAB=true; shift ;;
+        --after) AFTER+=("$2"); shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;;
         --) shift; AARGS=("$@"); break ;;
         *) die "start: unknown option $1" ;;
       esac
     done
     [ -n "$REPO" ] && [ -n "$BRANCH" ] && [ -n "$NAME" ] && [ -r "$TASK" ] || die "start needs --repo, --branch, --name and a readable --task"
     TASK=$(realpath "$TASK")
+    # The issue key of a name goes to the label, and the name keeps the description.
+    if [ -z "$LABEL_SET" ] && [ -n "$(ticket_of "$NAME")" ]; then
+      LABEL=$(ticket_of "$NAME"); REST=$(printf '%s' "$NAME" | sed -E 's/^[A-Za-z]{2,6}-[0-9]{1,5}-?//')
+      [ -z "$REST" ] || NAME=$REST
+    fi
     for A in "${AFTER[@]+"${AFTER[@]}"}"; do [ -n "$(entry "$A")" ] || die "--after $A: no such dispatch in run $RUN"; done
     D=$(new_id)
     AARGS_JSON=$(printf '%s\n' "${AARGS[@]+"${AARGS[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     SPEC=$(jq -cn --arg repo "$REPO" --arg branch "$BRANCH" --arg name "$NAME" --arg kind "$KIND" --arg base "$BASE" \
-      --arg task "$TASK" --argjson aargs "$AARGS_JSON" --argjson tab "$TAB" \
-      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, agent_args: $aargs, tab: $tab}')
+      --arg task "$TASK" --argjson aargs "$AARGS_JSON" --arg label "$LABEL" \
+      '{repo: $repo, branch: $branch, name: $name, kind: $kind, base: $base, task: $task, agent_args: $aargs, label: $label}')
     AFTER_JSON=$(printf '%s\n' "${AFTER[@]+"${AFTER[@]}"}" | jq -R . | jq -sc 'map(select(length > 0))')
     ledger_mod --arg d "$D" --arg ts "$(now)" --argjson spec "$SPEC" --argjson after "$AFTER_JSON" \
       '. + [{dispatch: $d, attempt: 1, supersedes: null, after: $after, status: "pending", outcome: null, decision: null,
@@ -314,18 +293,18 @@ case "$CMD" in
     [ -n "$AGENT" ] && [ -n "$SUBJ" ] && { [ -n "$BODY" ] || [ -n "$BODY_FILE" ]; } || die "send needs --agent, --subject and --body or --body-file"
     WI="$RUN_DIR/workers/$AGENT/inbox.jsonl"
     "$MAIL" send --inbox "$WI" --from supervisor --type followup --subject "$SUBJ" ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"}
-    index_worker "$AGENT"
+    # A worker that gets new work is watched again.
+    supervise "$AGENT" "$REPORTS"
     nudge "$AGENT" "Your supervisor sent a follow-up. Read it: $MAIL read --inbox $WI --unacked"
     ;;
 
   ps)
     bind_run
     JSON=0; while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
-    [ -z "${HERDR_PANE_ID:-}" ] || set_pending "$HERDR_PANE_ID" false
     UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
     AS='{}'
     for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
-      ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent.agent_status // "missing"' || echo missing)
+      ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent | if . == null then "missing" elif .stalled_secs then "stalled" else .agent_status end' || echo missing)
       AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
     done
     ROWS=$(jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" '
@@ -339,6 +318,7 @@ case "$CMD" in
          else ($as[$e.agent] // "missing") as $st
            | if $st == "missing" then "exited"
              elif $st == "blocked" then "stuck"
+             elif $st == "stalled" then "stalled"
              else "live"
              end
          end) as $live
@@ -349,6 +329,7 @@ case "$CMD" in
          elif ($mine | any(.type == "worker_done")) then "worker_done"
          elif ($mine | any(.type == "question")) then "question"
          elif $live == "stuck" then "stuck"
+         elif $live == "stalled" then "stalled"
          elif $live == "exited" and $e.status == "working" then "exited"
          elif $e.status == "failed_start" then "failed_start"
          elif ($mine | any(.type == "status")) then "status"
@@ -357,7 +338,8 @@ case "$CMD" in
       | (if $att == "escalation" then "tell the user; \($mail) read --id \($mid)"
          elif $att == "worker_done" then "\($mail) ack --id \($mid) --decision reuse|retain|release"
          elif $att == "question" then "\($mail) reply --id \($mid) --body ..."
-         elif $att == "stuck" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
+         elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
+         elif $att == "stalled" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
          elif $att == "exited" then "inspect; \($mail) retry --dispatch \($e.dispatch) or abandon"
          elif $att == "failed_start" then "\($mail) show --dispatch \($e.dispatch); \($mail) retry --dispatch \($e.dispatch)"
          elif $att == "status" then "\($mail) read --id \($mid); \($mail) ack --id \($mid)"
@@ -391,7 +373,8 @@ case "$CMD" in
     AGENT=$(jq -r '.agent // empty' <<<"$E")
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
     ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" 'map(if .dispatch == $d then .status = $s | .settled = $ts else . end)'
-    [ -z "$AGENT" ] || unindex_worker "$AGENT"
+    # An attempt that is closed sends no more reports.
+    [ -z "$AGENT" ] || supervise "$AGENT"
     [ "$CMD" != stop ] || [ -z "$AGENT" ] || release_worker "$AGENT" "$D"
     jq -cn --arg d "$D" --arg s "$NEWST" '{dispatch: $d, status: $s}'
     ;;
@@ -412,13 +395,23 @@ case "$CMD" in
     deliver "$TO" "$LINE" "${TITLE:-dispatch: wake held}" "$LINE" || exit 3
     ;;
 
-  track)
-    bind_run
-    PANE= NAME= TO=
-    while [ $# -gt 0 ]; do case "$1" in --pane) PANE=$2; shift 2 ;; --name) NAME=$2; shift 2 ;; --notify) TO=$2; shift 2 ;; *) die "track: unknown option $1" ;; esac; done
-    [ -n "$PANE" ] && [ -n "$NAME" ] || die "track needs --pane and --name"
-    [ -n "$TO" ] || TO=$(supervisor)
-    index_mod --arg p "$PANE" --arg r "$RUN" --arg a "$NAME" --arg s "$TO" '.[$p] = {run: $r, role: "tracked", agent: $a, supervisor: $s}'
+  adopt)
+    # Runs started before Herdr kept the links: link each live worker, and label it from its name.
+    N=0
+    for LEDGER in "$RUNS"/*/ledger.json; do
+      [ -f "$LEDGER" ] || continue
+      RUN_DIR=$(dirname "$LEDGER"); RUN=$(basename "$RUN_DIR"); SUP=$(supervisor)
+      herdr pane get "$SUP" >/dev/null 2>&1 || continue
+      while IFS=$'\t' read -r AGENT STATUS; do
+        PANE=$(herdr agent get "$AGENT" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
+        [ -n "$PANE" ] && [ "$PANE" != "$SUP" ] || continue
+        if [ "$STATUS" = working ]; then supervise "$PANE" "$REPORTS"; else supervise "$PANE"; fi
+        KEY=$(ticket_of "$AGENT"); [ -n "$KEY" ] || KEY=$(ticket_of "$RUN")
+        [ -z "$KEY" ] || [ -n "$(herdr pane get "$PANE" | jq -r '.result.pane.tokens.label // empty')" ] || label_pane "$PANE" "$KEY"
+        N=$((N + 1))
+      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.agent, .status] | @tsv' "$LEDGER")
+    done
+    jq -cn --argjson n "$N" '{adopted: $n}'
     ;;
 
   report)
@@ -435,7 +428,8 @@ case "$CMD" in
     SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
       ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
     echo "$SENT"
-    [ "$TYPE" != worker_done ] || unindex_worker "$FROM"
+    # A worker that is done stays linked for the tree and sends no more reports.
+    [ "$TYPE" != worker_done ] || supervise "$FROM"
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
       ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '\n|' '  ' | cut -c1-160)
       notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \

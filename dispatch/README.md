@@ -4,7 +4,9 @@ Supervise coding agents in [Herdr](https://herdr.dev) without polling them.
 
 A supervisor agent hands work to worker agents, each in its own git worktree. When a worker finishes, has a question or gets stuck, the supervisor is woken by one line typed into its pane. Nothing in the supervisor waits, so there is no watcher to time out and re-arm, and it stays free while workers run.
 
-Herdr gives you `agent prompt` and `agent wait`. This adds what long-running, parallel work needs on top of them: a durable mailbox, push wakes that will not land in a half-typed prompt, and a report when a worker blocks or disappears.
+Herdr gives you `agent prompt` and `agent wait`. This adds what long-running, parallel work needs on top of them: a durable mailbox with typed and acked messages, a ledger of attempts with retries and dependencies, and a lifecycle around each worker.
+
+It builds on three things in the Herdr server: a delivery queue that types a line into a pane only when that is safe, supervision links that report a blocked, stalled or gone worker, and jobs that run a command with no pane. Those are in the [mago0/herdr](https://github.com/mago0/herdr) fork. On a Herdr without them, use this plugin at commit `1dde74a`, version 0.1.0, which carries its own event hook.
 
 ![Overview: agents call dispatch.sh, mail goes to state files, Herdr types one wake line into the target pane](docs/overview.png)
 
@@ -16,10 +18,10 @@ For a short exchange with an agent beside you, use it. It is simpler. It stops f
 - **The supervisor stays free.** No blocking wait and no idle token cost. One supervisor can hold many workers and hear from them in any order.
 - **Real messages, not screen scraping.** Workers send typed mail (`status`, `question`, `escalation`, `worker_done` with an outcome). A wait only says an agent stopped, and reading its terminal can lose output.
 - **Durable and acked.** Mail stays until it is acknowledged, so it survives a restart, a context compaction or a missed wake. Herdr events are not replayed.
-- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake is held while the target pane is focused or at a dialog; you get a toast, and the line is delivered when you move away.
-- **Stuck and dead workers are reported at once**, including a closed tab or workspace, which emits no pane event in Herdr.
+- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while the target pane is focused or at a dialog, you get a toast, and Herdr types it when you move away.
+- **Blocked, stalled and dead workers are reported at once**, with the text of the dialog a blocked worker shows.
 - **A lifecycle around each worker.** A worktree per task, a ledger of attempts, retries, dependencies, and an explicit keep or release decision at the end.
-- **External polls move out of the harness.** A loop that watches a chat thread or a pull request runs in a plain pane with no time limit and wakes an agent only when something changed.
+- **External polls move out of the harness.** A command that watches a chat thread or a pull request runs as a Herdr job, with no pane and no time limit, and wakes an agent only when something changed.
 
 If you have used Orca's orchestration, this is that model for Herdr: runs, typed and acked messages, and a fleet view, with wakes delivered by push.
 
@@ -50,9 +52,11 @@ Other lines it can receive:
 | Line | Meaning |
 |---|---|
 | `MAIL\|<id>\|<type>\|<from>\|<subject>` | a worker reported; `question` gets `dispatch.sh reply` |
-| `DISPATCH\|blocked\|<agent>\|<run>` | a worker stopped at a permission dialog or question |
-| `DISPATCH\|exited\|<agent>\|<run>` | a worker's pane went away before it reported `worker_done` |
-| `DISPATCH\|pending\|<run>` | wakes were held while you were in the pane; run `dispatch.sh ps` |
+| `HERDR\|blocked\|<agent>\|<pane>\|<what it shows>` | a worker stopped at a permission dialog or question |
+| `HERDR\|stalled\|<agent>\|<pane>\|<seconds>` | a worker reports working and its screen does not change |
+| `HERDR\|exited\|<agent>\|<pane>` | a worker's agent or pane went away before it reported `worker_done` |
+
+The `HERDR` lines come from the server, through the supervision link that `dispatch.sh start` makes.
 
 `dispatch.sh ps` shows every attempt with its liveness and the next command to run.
 
@@ -64,49 +68,49 @@ root="$(herdr plugin list --plugin dispatch --json | jq -r '.result.plugins[0].p
 ln -s "$root/skill" ~/.claude/skills/dispatch   # or your agent's skills directory
 ```
 
-Keep the skill symlinked to the installed plugin and do not copy it: the scripts and the hook share the pane index format and the wake lines.
+Keep the skill symlinked to the installed plugin and do not copy it, so that the skill text and the scripts stay the same version.
 
 Requirements:
 
-- Herdr 0.9.1 or later
+- A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later)
 - `bash`, `jq`, `flock`, `git`; `inotifywait` for an event-driven `dispatch.sh wait` (falls back to polling)
-- Go 1.22 or later to build the hook on install
 
-## Waking an agent from your own loop
+`dispatch.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor.
 
-Chat threads and pull requests cannot push to your machine, so something has to poll them. Run that loop in a plain Herdr pane, not as a task inside an agent session, and let it wake the agent only when there is news:
+## Row labels
+
+Herdr shows a label at the right edge of an agent's row in the sidebar tree. `dispatch.sh start --label SRE-142` sets it on the worker, and `dispatch.sh run --label SRE-142` on the supervisor. A name or a run name that starts with an issue key is split: `sre-142-fix-probes` gives the label `SRE-142` and the agent name `fix-probes`.
+
+## Waking an agent from outside
+
+Chat threads and pull requests cannot push to your machine, so something has to poll them. Give that command to Herdr as a job, and let it wake the agent only when there is news:
 
 ```sh
-dispatch.sh track  --pane "$LOOP_PANE" --name pr-watch       # tell the supervisor if the loop's pane goes away
-dispatch.sh notify --line "PR 123 has a new push"            # exit 3 = held; retry on the next tick
-dispatch.sh notify --to worker-1 --line "..."                # any agent, not only the supervisor
+herdr job add pr-watch --every 60s --to lead -- ./pr-news.sh     # exit 0 with text = news, delivered to lead
+herdr job add proposals --path proposals.json --to lead -- ./warranted.sh
+herdr agent deliver lead "PR 123 has a new push"                 # one line, from any process
 ```
 
-`notify` uses the same held-not-typed rule and stores nothing, so a loop that reports state on every tick needs no extra bookkeeping.
+The same news is not delivered twice in a row, so the command needs no bookkeeping. A job ends when its target pane or the pane that added it closes.
 
 ## Limits
 
-- A worker that hangs while `working` is not detected.
-- A worker that blocks before the launcher returns is reported by `dispatch.sh start` (`status: blocked`), not by the hook.
-- A held `DISPATCH|exited` wake for a `track --notify` target is not delivered later. Only held wakes for a supervisor are.
+- `stalled` finds a frozen agent. An agent that still animates while it waits on a tool that never returns is not found.
 - Wake delivery was tested with Claude Code. Other agent kinds queue typed input in their own way.
-- Hook events are not replayed after a Herdr restart. `dispatch.sh ps` is the reconcile path.
+- Herdr events are kept in memory. `herdr events read` reports `lost` for a cursor that is too old or from before a restart, and `dispatch.sh ps` is the reconcile path.
 
 ## How it is built
 
-Two parts that version together:
-
-- **A skill** (`skill/`): `SKILL.md`, the reference agents read, and the scripts they run. `dispatch.sh` holds runs, the ledger, the mailbox and the fleet view.
-- **An event hook** (`hook/`): a small Go binary that Herdr starts once per pane event. It reads only the pane index, exits at once for panes that are not part of a run, and otherwise reports a blocked or vanished worker or delivers a held wake.
+A skill (`skill/`): `SKILL.md`, the reference agents read, and the scripts they run. `dispatch.sh` holds runs, the ledger, the mailbox and the fleet view. Herdr holds the supervision links, the held wake lines and the jobs.
 
 State is under `${XDG_STATE_HOME:-~/.local/state}/agent-dispatch/`:
 
 - `runs/<run>/ledger.json`: dispatch attempts
 - `runs/<run>/inbox.jsonl`: worker to supervisor mail
 - `runs/<run>/workers/<agent>/inbox.jsonl`: supervisor to worker mail
-- `panes.json`: pane id to run, role and wake target
+- `runs/<run>/supervisor`: the pane that gets the run's wake lines
 
-Diagrams, as standalone HTML to open locally: `docs/overview.html` (one screen) and `docs/architecture.html` (step-by-step flows).
+Diagrams of version 0.1.0, as standalone HTML to open locally: `docs/overview.html` and `docs/architecture.html`. They still show the event hook, which Herdr replaced.
 
 ## Test
 
@@ -114,16 +118,4 @@ Diagrams, as standalone HTML to open locally: `docs/overview.html` (one screen) 
 test/smoke.sh
 ```
 
-Runs every `dispatch.sh` command that needs no live agent against a throwaway state directory.
-
-## State read by other plugins
-
-The [tree](../tree/) plugin reads the state below and writes none of it. Treat a change to these names as a breaking change.
-
-| File | Fields |
-|---|---|
-| `runs/<run>/supervisor` | the supervisor pane id |
-| `runs/<run>/ledger.json` | `pane_id`, `tab_id`, `workspace_id`, `worktree`, `created` |
-| `panes.json` | `role` (the value `tracked`) |
-
-It also reads the run directory's name for an issue key.
+Runs every `dispatch.sh` command that needs no live agent against a throwaway state directory. It needs a running Herdr server with delivery queues.

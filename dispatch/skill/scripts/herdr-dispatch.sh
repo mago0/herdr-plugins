@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Start a coding agent in a git worktree that Herdr opens as its own workspace, or with --tab
-# as a new tab in the caller's workspace.
+# Start a coding agent in a git worktree that Herdr opens as its own workspace.
 # Prints one JSON receipt on stdout; diagnostics go to stderr.
 set -euo pipefail
 
@@ -8,11 +7,8 @@ usage() {
   cat >&2 <<'EOF'
 Usage: herdr-dispatch.sh --repo <path> --branch <name> --name <agent-name> --prompt-file <file>
                          [--base <ref>] [--kind <herdr agent kind>]
-                         [--tab] [--run-dir <dir> | --inbox <file>]
+                         [--run-dir <dir> | --inbox <file>]
                          [-- <native agent args>...]
-  --tab      open the worker as a new tab in the caller's Herdr workspace instead of its own
-             workspace. The worktree path is the same; release closes the tab and runs
-             `git worktree remove`.
   --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl and a per-worker inbox for replies.
              Used by dispatch.sh.
   --inbox    legacy single-mailbox mode (no worker inbox, no supervisor wake).
@@ -20,11 +16,10 @@ EOF
   exit 2
 }
 
-REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= TAB_MODE=
+REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR=
 AGENT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --tab) TAB_MODE=1; shift ;;
     --repo) REPO=$2; shift 2 ;;
     --branch) BRANCH=$2; shift 2 ;;
     --base) BASE=$2; shift 2 ;;
@@ -83,34 +78,16 @@ if [ -z "$WT_EXISTS" ] && ! git -C "$ROOT" show-ref --verify --quiet "refs/heads
   fi
 fi
 
-TAB=
-if [ -n "$TAB_MODE" ]; then
-  # `herdr worktree create/open` always opens a new workspace, so tab mode makes the worktree
-  # with git and opens a tab on it in the caller's workspace.
-  CALLER_WS=${HERDR_WORKSPACE_ID:-}
-  [ -n "$CALLER_WS" ] || CALLER_WS=$(herdr pane current 2>/dev/null | jq -r '.result.pane.workspace_id // empty' 2>/dev/null || true)
-  [ -n "$CALLER_WS" ] || die "--tab: cannot resolve the caller's workspace"
-  if [ -z "$WT_EXISTS" ]; then
-    if [ -n "$NEW_BRANCH" ]; then git -C "$ROOT" worktree add --quiet -b "$BRANCH" "$WT" "$BASE" >&2
-    else git -C "$ROOT" worktree add --quiet "$WT" "$BRANCH" >&2; fi || die "git worktree add $WT failed"
-  fi
-  OUT=$(herdr tab create --workspace "$CALLER_WS" --cwd "$WT" --label "$NAME" --no-focus)
-  [ "$(echo "$OUT" | jq -r 'has("error")')" = "false" ] || die "tab: $(echo "$OUT" | jq -r .error.message)"
-  PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
-  WS=$(echo "$OUT" | jq -r .result.root_pane.workspace_id)
-  TAB=$(echo "$OUT" | jq -r .result.tab.tab_id)
+if [ -n "$WT_EXISTS" ]; then
+  OUT=$(herdr worktree open --cwd "$ROOT" --path "$WT" --label "$NAME" --no-focus)
 else
-  if [ -n "$WT_EXISTS" ]; then
-    OUT=$(herdr worktree open --cwd "$ROOT" --path "$WT" --label "$NAME" --no-focus)
-  else
-    ARGS=(--cwd "$ROOT" --branch "$BRANCH" --path "$WT" --label "$NAME" --no-focus)
-    [ -z "$NEW_BRANCH" ] || ARGS+=(--base "$BASE")
-    OUT=$(herdr worktree create "${ARGS[@]}")
-  fi
-  [ "$(echo "$OUT" | jq -r 'has("error")')" = "false" ] || die "worktree: $(echo "$OUT" | jq -r .error.message)"
-  PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
-  WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
+  ARGS=(--cwd "$ROOT" --branch "$BRANCH" --path "$WT" --label "$NAME" --no-focus)
+  [ -z "$NEW_BRANCH" ] || ARGS+=(--base "$BASE")
+  OUT=$(herdr worktree create "${ARGS[@]}")
 fi
+[ "$(echo "$OUT" | jq -r 'has("error")')" = "false" ] || die "worktree: $(echo "$OUT" | jq -r .error.message)"
+PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
+WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
 
 # Herdr also opens the main checkout as a parent workspace. This script never closes it:
 # a plain close is refused with `workspace_group_close_required`, and `--group` would take
@@ -227,9 +204,8 @@ fi
 
 jq -n --arg agent "$NAME" --arg kind "$KIND" --arg ws "$WS" --arg pane "$PANE" --arg wt "$WT" \
   --arg branch "$BRANCH" --arg root "$ROOT" --arg inbox "$INBOX" --arg winbox "$WORKER_INBOX" --arg rundir "$RUN_DIR" \
-  --arg status "$STATUS" --arg task "$TASK_FILE" --arg detail "$START" --arg tab "$TAB" \
-  '{backend:"herdr", agent:$agent, kind:$kind, placement:(if $tab == "" then "workspace" else "tab" end),
-    workspace_id:$ws, tab_id:(if $tab == "" then null else $tab end), pane_id:$pane, worktree:$wt,
+  --arg status "$STATUS" --arg task "$TASK_FILE" --arg detail "$START" \
+  '{backend:"herdr", agent:$agent, kind:$kind, workspace_id:$ws, pane_id:$pane, worktree:$wt,
     branch:$branch, repo_root:$root, inbox:$inbox, worker_inbox:$winbox, run_dir:$rundir,
     task_file:$task, status:$status}
    + (if ($status | startswith("start_failed")) then {detail:$detail} else {} end)'

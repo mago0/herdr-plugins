@@ -1,40 +1,6 @@
 id = "dispatch"
 name = "Dispatch"
-version = "0.1.0"
-min_herdr_version = "0.9.1"
-description = "Push delivery for dispatched agents: tells a supervisor when a worker blocks or exits, and delivers held mail wakes."
+version = "0.2.0"
+min_herdr_version = "0.9.3"
+description = "Supervise worker agents in git worktrees: runs, typed and acked mail, and a fleet view. Needs a Herdr server with delivery queues and supervision links."
 platforms = ["linux", "macos"]
-
-[[build]]
-command = ["go", "build", "-o", "bin/dispatch-hook", "./hook"]
-
-[[events]]
-on = "pane.agent_status_changed"
-command = ["./bin/dispatch-hook"]
-
-# A resumed worker gets its dispatch name back when herdr detects it.
-[[events]]
-on = "pane.agent_detected"
-command = ["./bin/dispatch-hook"]
-
-[[events]]
-on = "pane.exited"
-command = ["./bin/dispatch-hook"]
-
-[[events]]
-on = "pane.closed"
-command = ["./bin/dispatch-hook"]
-
-# A closed tab or workspace takes its panes with it and emits no pane event.
-[[events]]
-on = "tab.closed"
-command = ["./bin/dispatch-hook"]
-
-[[events]]
-on = "workspace.closed"
-command = ["./bin/dispatch-hook"]
-
-# A focus move is when a held wake becomes safe to type. Tab and workspace switches emit this too.
-[[events]]
-on = "pane.focused"
-command = ["./bin/dispatch-hook"]

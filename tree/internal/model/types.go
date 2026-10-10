@@ -17,6 +17,14 @@ type Workspace struct {
 	Number                  int
 	Where                   string
 	Worktree                bool
+	Git                     Git
+}
+
+// Git is the state of a main checkout. Repo names its repository. Branch is the branch, or a
+// short commit id when HEAD is detached. Ahead and Behind count commits against the upstream.
+type Git struct {
+	Repo, Branch  string
+	Ahead, Behind int
 }
 
 type Tab struct {
@@ -32,6 +40,7 @@ type Agent struct {
 	// Where and Worktree are those of the checkout that holds the agent's working directory.
 	Where    string
 	Worktree bool
+	Git      Git
 	// Tag is the text of the pane's label token, such as a ticket key.
 	Tag string
 }
@@ -81,6 +90,8 @@ type Node struct {
 	// Where says where the row's agent works, and Worktree is true for a linked Git worktree.
 	Where    string
 	Worktree bool
+	// Git is set when the row works in the main checkout of Repo.
+	Git Git
 	// Tag is the label a user or agent set on the row's pane. It is drawn at the right edge.
 	Tag      string
 	Children []*Node

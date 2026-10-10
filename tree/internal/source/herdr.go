@@ -153,9 +153,13 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		if w.Worktree != nil {
 			m.Repo = w.Worktree.Repo
 			m.Where, m.Worktree = where(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, home), w.Worktree.Linked
+			if m.Git = gitState(w.Worktree.Root, w.Worktree.Linked); m.Git.Branch != "" {
+				m.Git.Repo = m.Repo
+			}
 		} else if main, top, linked := checkout(cwd[first[w.ID]]); main != "" {
 			m.Repo = filepath.Base(main)
 			m.Where, m.Worktree = where(main, top, linked, home), linked
+			m.Git = gitState(main, linked)
 		}
 		s.Workspaces = append(s.Workspaces, m)
 	}
@@ -170,7 +174,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
-			Where: where(main, top, linked, home), Worktree: linked, Tag: tag[a.Pane],
+			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane],
 		})
 	}
 	return s, nil

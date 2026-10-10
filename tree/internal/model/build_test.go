@@ -256,3 +256,29 @@ func TestBuildContainerCycleKeepsEveryAgent(t *testing.T) {
 		t.Errorf("both workspaces hold agents, got no-agent rows:\n%s", outline(got))
 	}
 }
+
+func TestBuildGivesARowTheGitStateOfTheRepoItShows(t *testing.T) {
+	s := Snapshot{
+		Workspaces: []Workspace{{ID: "w1", Label: "ops", Repo: "flosports", Number: 1}},
+		Tabs:       []Tab{{ID: "w1:t1", WorkspaceID: "w1", Number: 1}, {ID: "w1:t2", WorkspaceID: "w1", Number: 2}},
+		Agents: []Agent{
+			{PaneID: "w1:p1", TabID: "w1:t1", WorkspaceID: "w1", Git: Git{Repo: "flosports", Branch: "main", Ahead: 1}},
+			{PaneID: "w1:p2", TabID: "w1:t2", WorkspaceID: "w1", Git: Git{Repo: "iam", Branch: "feat"}},
+		},
+	}
+	got := map[string]Git{}
+	var walk func(ns []*Node)
+	walk = func(ns []*Node) {
+		for _, n := range ns {
+			got[n.ID] = n.Git
+			walk(n.Children)
+		}
+	}
+	walk(Build(s, Dispatch{}).Roots)
+	if want := (Git{Repo: "flosports", Branch: "main", Ahead: 1}); got["w1:p1"] != want {
+		t.Errorf("row in its repo has %+v, want %+v", got["w1:p1"], want)
+	}
+	if got["w1:p2"] != (Git{}) {
+		t.Errorf("row in another repo has %+v, want none", got["w1:p2"])
+	}
+}

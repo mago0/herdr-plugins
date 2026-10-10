@@ -6,18 +6,18 @@ Herdr's sidebar groups workspaces by repository. Supervised work has another sha
 
 ```
  ▾ ● ops
-   │ ops
+   │ ops@main +2
    ├─ ● review monitor ⇥
    │  ├─ ● review-86
-   │  │    iam
+   │  │    iam ⎇
    │  └─ ● review-234
-   │       billing
+   │       billing ⎇
    └─ ● planning ⇥
       └─ ● add-probe
-           api
+           api ⎇
  ▾ ● platform migration
    ├─ ● add-vpc-routes
-   │    infra
+   │    infra ⎇
    └─ ● migrate-scheduler
       │ scheduler
       └─ ● build-images ⇥
@@ -101,9 +101,11 @@ A row is one pane that hosts an agent. Terminals have no row.
 - When one agent of such a tab is the only one that supervises workers, the tab's row is that agent. The other panes of the tab are rows under it, with its workers.
 - `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
 
-The repository is on a second line under the name, in italics and its own color. A row has that line only when its repository is not the one of the row it hangs from. Rows of one supervisor are in workspace order, then in tab bar order.
+The repository is on a second line under the name, in italics and its own color. A row has that line only when its checkout is not the one of the row it hangs from: another repository, another linked worktree, or the main checkout under a worktree. Rows of one supervisor are in workspace order, then in tab bar order.
 
-A row whose agent works in a linked Git worktree has the worktree glyph after its name. For a workspace row this comes from Herdr. For a tab or pane row it comes from the agent's working directory.
+A row that works in a main checkout shows `<repo>@<branch>`, then `-N` for commits behind the upstream branch and `+N` for commits ahead. A count of zero is not shown, and a branch with no upstream has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the tree does not fetch, and it asks Git again every 10 seconds.
+
+A row that works in a linked Git worktree shows the repository and the worktree glyph, with no branch. For a workspace row this comes from Herdr. For a tab or pane row it comes from the agent's working directory. The last line of the pane names the worktree.
 
 ## Labels
 

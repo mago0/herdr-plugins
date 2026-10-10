@@ -17,7 +17,8 @@ type Row struct {
 	Last   bool
 	Trunk  []bool
 	Rollup []string
-	// Repo is the repository shown on a second line: set where it is not the repo of the row above.
+	// Repo is the repository shown on a second line: set where the row's checkout is not that of
+	// the row it hangs from.
 	Repo string
 	// Gap is true for a row with a blank line above it: each root after the first, and the
 	// first of the groups.
@@ -83,11 +84,20 @@ func group(id, name string, members []*model.Node) *model.Node {
 	}
 }
 
+// sameCheckout is true when a row works in the checkout of the row it hangs from: the same
+// repository, and the same linked worktree or the main checkout for both.
+func sameCheckout(n, parent *model.Node) bool {
+	if parent == nil {
+		return n.Repo == ""
+	}
+	return n.Repo == parent.Repo && n.Worktree == parent.Worktree && (!n.Worktree || n.Where == parent.Where)
+}
+
 // Rows flattens the tree to the lines on screen.
 func Rows(t model.Tree, st State) []Row {
 	var out []Row
-	var walk func(n *model.Node, depth int, trunk []bool, last bool, above string)
-	walk = func(n *model.Node, depth int, trunk []bool, last bool, above string) {
+	var walk func(n *model.Node, depth int, trunk []bool, last bool, parent *model.Node)
+	walk = func(n *model.Node, depth int, trunk []bool, last bool, parent *model.Node) {
 		kids := n.Children
 		if st.Attention {
 			kids = nil
@@ -103,7 +113,7 @@ func Rows(t model.Tree, st State) []Row {
 			above := out[len(out)-1]
 			r.Gap = n.Shown != model.KindGroup || above.Depth > 0 || above.Node.Shown != model.KindGroup
 		}
-		if n.Shown != model.KindGroup && n.Repo != above {
+		if n.Shown != model.KindGroup && !sameCheckout(n, parent) {
 			r.Repo = n.Repo
 		}
 		if r.Folded && n.Shown != model.KindGroup {
@@ -116,23 +126,23 @@ func Rows(t model.Tree, st State) []Row {
 				below = append(append([]bool(nil), trunk...), !last)
 			}
 			for i, c := range kids {
-				walk(c, depth+1, below, i == len(kids)-1, n.Repo)
+				walk(c, depth+1, below, i == len(kids)-1, n)
 			}
 		}
 	}
 	for _, n := range t.Roots {
 		if !st.Attention || needs(n) {
-			walk(n, 0, nil, true, "")
+			walk(n, 0, nil, true, nil)
 		}
 	}
 	if st.Attention {
 		return out
 	}
 	if len(t.NoAgent) > 0 {
-		walk(group(GroupNoAgent, "No agent", t.NoAgent), 0, nil, true, "")
+		walk(group(GroupNoAgent, "No agent", t.NoAgent), 0, nil, true, nil)
 	}
 	if len(t.Hidden) > 0 {
-		walk(group(GroupHidden, "Hidden", t.Hidden), 0, nil, true, "")
+		walk(group(GroupHidden, "Hidden", t.Hidden), 0, nil, true, nil)
 	}
 	return out
 }

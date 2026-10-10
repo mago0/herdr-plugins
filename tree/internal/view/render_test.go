@@ -180,3 +180,38 @@ func TestRenderNoRows(t *testing.T) {
 		t.Fatalf("no rows, got %q", got)
 	}
 }
+
+func TestRenderRepoLineSaysTheBranchOrMarksALinkedWorktree(t *testing.T) {
+	wt := func(id, where string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: "iam", Shown: model.KindWorkspace,
+			Worktree: true, Where: where, Children: kids}
+	}
+	pane := wt("p", "iam/_worktrees/b")
+	pane.Shown = model.KindPane
+	ops := &model.Node{ID: "o", Label: "ops", Status: model.Idle, Repo: "flosports", Shown: model.KindWorkspace,
+		Where: "~/flosports", Git: model.Git{Repo: "flosports", Branch: "main", Ahead: 1, Behind: 2},
+		Children: []*model.Node{
+			wt("a", "iam/_worktrees/a"),
+			wt("b", "iam/_worktrees/b", pane),
+			{ID: "c", Label: "c", Status: model.Idle, Repo: "iam", Shown: model.KindWorkspace, Where: "~/iam",
+				Git: model.Git{Repo: "iam", Branch: "feat"}},
+		}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{ops}}, State{}), 40, -1, plain()), []string{
+		" ▾ o ops",
+		"   │ flosports@main -2 +1",
+		"   ├─ o a",
+		"   │" + sp(4) + "iam ⎇",
+		"   ├─ o b",
+		"   │  │ iam ⎇",
+		"   │  └─ o p ›",
+		"   └─ o c",
+		sp(8) + "iam@feat",
+	})
+}
+
+func TestRenderRepoLineCutsTheRepoBeforeTheBranch(t *testing.T) {
+	n := &model.Node{ID: "n", Label: "n", Status: model.Idle, Repo: "infra-base-services", Shown: model.KindWorkspace,
+		Git: model.Git{Repo: "infra-base-services", Branch: "main", Ahead: 3}}
+	got := Render(Rows(model.Tree{Roots: []*model.Node{n}}, State{}), 20, -1, plain())
+	same(t, got, []string{"   o n", sp(5) + "infra-…@main +3"})
+}

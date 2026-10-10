@@ -1,6 +1,7 @@
 package view
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -80,7 +81,8 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 				glyph = " " + th.PaneGlyph
 			}
 		}
-		if dot && n.Worktree {
+		// The repo line carries the mark of a linked worktree. A row with no repo keeps it here.
+		if dot && n.Worktree && n.Repo == "" {
 			glyph += " " + th.WorktreeGlyph
 		}
 		tail := 0
@@ -130,14 +132,45 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		add(b.String())
 		if r.Repo != "" {
 			under := below(r)
-			repo := r.Repo
+			room := 0
 			if width > 0 {
-				repo = cut(repo, max(minLabel, width-1-lipgloss.Width(under)))
+				room = max(1, width-1-lipgloss.Width(under))
 			}
-			add(mark + th.paint(under, faint) + th.repo(repo))
+			add(mark + th.paint(under, faint) + repoLine(n, room, th))
 		}
 	}
 	return lines
+}
+
+// repoLine is the text under a row: the repo with its branch and its distance from the upstream,
+// or the repo with the worktree glyph for a linked worktree. room is the cells it can take, or 0
+// for no limit; the repo is cut before the branch, and the text after them is kept whole.
+func repoLine(n *model.Node, room int, th Theme) string {
+	name, branch, tail := n.Repo, n.Git.Branch, ""
+	switch {
+	case n.Worktree:
+		branch, tail = "", " "+th.WorktreeGlyph
+	case branch != "":
+		if n.Git.Behind > 0 {
+			tail += fmt.Sprintf(" -%d", n.Git.Behind)
+		}
+		if n.Git.Ahead > 0 {
+			tail += fmt.Sprintf(" +%d", n.Git.Ahead)
+		}
+	}
+	if room > 0 {
+		room -= lipgloss.Width(tail)
+		if branch == "" {
+			name = cut(name, max(minLabel, room))
+		} else {
+			name = cut(name, max(minLabel, room-1-lipgloss.Width(branch)))
+			branch = cut(branch, max(minLabel, room-1-lipgloss.Width(name)))
+		}
+	}
+	if branch != "" {
+		name += "@" + branch
+	}
+	return th.repo(name) + th.paint(tail, faint)
 }
 
 // below is the part of a repo line before the repo: the guide lines that run past the row, and

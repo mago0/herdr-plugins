@@ -167,6 +167,36 @@ func TestSnapshotNumbersTabsByTheirPlaceInTheTabBar(t *testing.T) {
 	}
 }
 
+func TestSnapshotNamesTheRepoOfAWorkspaceHerdrGivesNoWorktree(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "flosports")
+	if err := os.MkdirAll(filepath.Join(repo, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	other := t.TempDir()
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[
+			{"workspace_id":"w1","label":"migration","number":1},
+			{"workspace_id":"w2","label":"notes","number":2}]}}`,
+		"tab.list": `{"id":"tree","result":{"tabs":[
+			{"tab_id":"w1:t2","workspace_id":"w1","label":"first"},
+			{"tab_id":"w2:t1","workspace_id":"w2","label":"notes"},
+			{"tab_id":"w1:t1","workspace_id":"w1","label":"second"}]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","cwd":"` + other + `"},
+			{"pane_id":"w1:p2","tab_id":"w1:t2","cwd":"` + repo + `"},
+			{"pane_id":"w1:p3","tab_id":"w1:t2","cwd":"` + other + `"},
+			{"pane_id":"w2:p1","tab_id":"w2:t1","cwd":"` + other + `"}]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Workspaces[0].Repo != "flosports" || got.Workspaces[1].Repo != "" {
+		t.Fatalf("repos = %q, %q", got.Workspaces[0].Repo, got.Workspaces[1].Repo)
+	}
+}
+
 func TestSnapshotReadsTheLabelToken(t *testing.T) {
 	s := serve(t, map[string]string{
 		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,

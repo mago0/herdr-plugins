@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -105,6 +106,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Pane    string             `json:"pane_id"`
 			Tab     string             `json:"tab_id"`
 			Focused bool               `json:"focused"`
+			Cwd     string             `json:"cwd"`
 			Tokens  map[string]*string `json:"tokens"`
 		} `json:"panes"`
 	}
@@ -132,11 +134,28 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			tag[p.Pane] = strings.TrimSpace(*v)
 		}
 	}
+	// Herdr names a workspace's repository only where a worktree action recorded it. For the
+	// others, the checkout of the first pane in the first tab stands in.
+	first := map[string]string{}
+	for _, t := range tabs.Tabs {
+		if _, ok := first[t.Workspace]; !ok {
+			first[t.Workspace] = t.ID
+		}
+	}
+	cwd := map[string]string{}
+	for _, p := range panes.Panes {
+		if _, ok := cwd[p.Tab]; !ok {
+			cwd[p.Tab] = p.Cwd
+		}
+	}
 	for _, w := range ws.Workspaces {
 		m := model.Workspace{ID: w.ID, Label: w.Label, Number: w.Number, Status: w.Status}
 		if w.Worktree != nil {
 			m.Repo = w.Worktree.Repo
 			m.Where, m.Worktree = where(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, home), w.Worktree.Linked
+		} else if main, top, linked := checkout(cwd[first[w.ID]]); main != "" {
+			m.Repo = filepath.Base(main)
+			m.Where, m.Worktree = where(main, top, linked, home), linked
 		}
 		s.Workspaces = append(s.Workspaces, m)
 	}

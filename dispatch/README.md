@@ -18,7 +18,7 @@ For a short exchange with an agent beside you, use it. It is simpler. It stops f
 - **The supervisor stays free.** No blocking wait and no idle token cost. One supervisor can hold many workers and hear from them in any order.
 - **Real messages, not screen scraping.** Workers send typed mail (`status`, `question`, `escalation`, `worker_done` with an outcome). A wait only says an agent stopped, and reading its terminal can lose output.
 - **Durable and acked.** Mail stays until it is acknowledged, so it survives a restart, a context compaction or a missed wake. Herdr events are not replayed.
-- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while the target pane is focused or at a dialog, you get a toast, and Herdr types it when you move away.
+- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while the target pane is focused, holds text you typed and did not send, or its agent works or is at a dialog. You get a toast, and Herdr types it when that ends.
 - **Blocked, stalled and dead workers are reported at once**, with the text of the dialog a blocked worker shows.
 - **A lifecycle around each worker.** A worktree per task, a ledger of attempts, retries, dependencies, and an explicit keep or release decision at the end.
 - **External polls move out of the harness.** A command that watches a chat thread or a pull request runs as a Herdr job, with no pane and no time limit, and wakes an agent only when something changed.

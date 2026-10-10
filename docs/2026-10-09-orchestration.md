@@ -63,11 +63,40 @@ Findings, from Claude Code 2.1.288 in an isolated session:
 - The folder trust prompt has no numbers and its default is "No, exit". Enter there closed the
   agent. A fixed key for "approve" is therefore not safe.
 
-Design that follows: the tree reads the choices from the blocker text and offers them only when
-they are numbered from 1 with no gap and the agent kind is one whose dialogs were checked
-(`claude`). The client presses only one digit from 1 to 9 and refuses any other key a plugin
-names. Choices that open a text field ("Type something", "Chat about this") are left out. A dialog
-that fails those rules gets no answer items, and the user answers it in its pane.
+Design that follows, with the changes the review asked for:
+
+- The tree reads the choices from the screen lines of the agent (`blocker_lines`) and offers them
+  only when every numbered line runs from 1 with no gap or repeat, the dialog's cursor is on
+  exactly one of them, and the agent kind is one whose dialogs were checked (`claude`).
+- Choices that open a text field ("Type something", "Chat about this") are left out.
+- The request names the dialog (`dialog` on the agent record). The client sends `agent.answer`
+  with that name, and the server reads the screen again and refuses when the agent shows anything
+  else by then. The server accepts one digit from 1 to 9 and no other key.
+- The answers are never the first menu item, because Enter in a menu that just opened picks the
+  first item.
+- A dialog that fails those rules gets no answer items, and the user answers it in its pane.
+
+## Review, 2026-10-09
+
+An a-team review of both branches found no blocker, 6 high and 16 medium findings. Fixed after it:
+
+| Finding | Fix |
+|---|---|
+| Delivery text could hold keys (paste end, carriage return) | Every delivery is filtered once in the server; `dispatch.sh` refuses a `--from` that is not a plain name and strips control characters from the subject |
+| An answer could reach another dialog | `agent.answer` with the dialog name, checked against the screen at that moment |
+| A job never ended when a process it left held its output | The command runs in its own process group, which is stopped when the command exits |
+| A job could trigger itself | A job cannot run on `pane.delivery_changed`, starts at most once a second, and at most 64 deliveries wait for one pane |
+| The interleave test could not fail | A test that delivers twice with no wait between |
+| `release` of an old tab-placed worker aimed at the supervisor's workspace | `release` refuses such an entry and prints the commands to run by hand |
+| A delivery could be typed on top of unsent text, or while a working agent opens a dialog | Typed only when the agent waits for input and no typed text is unsent |
+| An unreadable state file was overwritten | It is renamed aside; the file is private and synced |
+| Answers were the first menu item | They are below the row's own items |
+| The parser could map numbers to the wrong choices | Screen lines, one cursor mark, no gap or repeat |
+| `events.read` gave no safe cursor for a cut page | The reply has `next` |
+| A group close reported the panes of one workspace | Every pane of the group is reported |
+| `agent start` wiped an existing link | It leaves a link that exists |
+| `adopt` could take a name a later run owns | It matches the pane in the ledger, and does not watch a worker that said it is done |
+| The label split could give an unusable name | A name whose rest does not start with a letter stays whole; `send` refuses an agent that is not in the run |
 
 ## Migration on one machine
 

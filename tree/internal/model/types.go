@@ -51,8 +51,11 @@ type Agent struct {
 	Pending int
 	// Stalled is true when the agent reports working and its screen does not change.
 	Stalled bool
-	// Blocker is what a blocked agent waits for, when Herdr knows it.
-	Blocker string
+	// Blocker is what a blocked agent waits for, when Herdr knows it. BlockerLines is the same
+	// text as the lines of the agent's screen, and Dialog is the name Herdr gives those lines.
+	Blocker      string
+	BlockerLines []string
+	Dialog       string
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -92,7 +95,9 @@ type Node struct {
 	Stalled bool
 	Blocker string
 	// Answers are the choices of the dialog a blocked agent shows, when one key picks each.
+	// Dialog names that dialog, so that Herdr can refuse an answer for a dialog that is gone.
 	Answers  []Answer
+	Dialog   string
 	Children []*Node
 	order    [3]int
 }

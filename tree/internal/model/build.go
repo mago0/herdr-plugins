@@ -53,14 +53,14 @@ func Build(s Snapshot) Tree {
 			repo = wsByID[a.WorkspaceID].Repo
 		}
 		var answers []Answer
-		if a.Status == Blocked {
-			answers = Answers(a.Kind, a.Blocker)
+		if a.Status == Blocked && a.Dialog != "" {
+			answers = Answers(a.Kind, a.BlockerLines)
 		}
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 			Label: AgentLabel(a), Status: a.Status, Repo: repo,
 			Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, repo), Tag: a.Tag,
-			Pending: a.Pending, Stalled: a.Stalled, Blocker: a.Blocker, Answers: answers,
+			Pending: a.Pending, Stalled: a.Stalled, Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
 			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
 		}
 	}

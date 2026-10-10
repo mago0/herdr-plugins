@@ -680,8 +680,8 @@ func TestSidebarLastLineSaysWhatABlockedRowWaitsFor(t *testing.T) {
 
 func TestMenuTitleCarriesTheAnswersOfABlockedRow(t *testing.T) {
 	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Tag: "SRE-9",
-		Answers: []model.Answer{{Key: "1", Text: "Yes"}, {Key: "2", Text: `No "thanks"`}}}
-	want := `herdr-menu2;{"kind":"workspace","id":"w1","agent_pane":"w1:p1","label":"SRE-9","answers":[{"key":"1","text":"Yes"},{"key":"2","text":"No \"thanks\""}]}`
+		Dialog: "d1a109", Answers: []model.Answer{{Key: "1", Text: "Yes"}, {Key: "2", Text: `No "thanks"`}}}
+	want := `herdr-menu2;{"t":"workspace","i":"w1","p":"w1:p1","l":"SRE-9","d":"d1a109","a":[["1","Yes"],["2","No \"thanks\""]]}`
 	if got := menuTitle(n, 1); got != want {
 		t.Fatalf("title = %s\nwant    %s", got, want)
 	}
@@ -689,5 +689,31 @@ func TestMenuTitleCarriesTheAnswersOfABlockedRow(t *testing.T) {
 	n.Focus = model.KindWorkspace
 	if got := menuTitle(n, 2); got != "herdr-menu;workspace;w1;2;;SRE-9" {
 		t.Fatalf("title = %s", got)
+	}
+}
+
+func TestMenuTitleFitsThePaneTitleLimit(t *testing.T) {
+	long := strings.Repeat("a long answer text ", 3)
+	n := &model.Node{ID: "w12:p34", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w12", Tag: "SRE-12345",
+		Dialog: "0123456789abcdef"}
+	for i := 1; i <= 6; i++ {
+		n.Answers = append(n.Answers, model.Answer{Key: fmt.Sprint(i), Text: long})
+	}
+	got := menuTitle(n, 1)
+	if !strings.HasPrefix(got, "herdr-menu2;") {
+		t.Fatalf("six answers still fit when their text is cut, got %s", got)
+	}
+	if n := len([]rune(got)); n > maxMenuTitle {
+		t.Fatalf("title is %d characters, more than Herdr keeps (%d)", n, maxMenuTitle)
+	}
+	for i := 1; i <= 6; i++ {
+		if !strings.Contains(got, fmt.Sprintf(`["%d","a `, i)) {
+			t.Fatalf("answer %d is missing or lost its start: %s", i, got)
+		}
+	}
+	// A request that cannot fit carries no answers. A cut request would not parse.
+	n.WorkspaceID = strings.Repeat("w", 300)
+	if got := menuTitle(n, 1); strings.HasPrefix(got, "herdr-menu2;") {
+		t.Fatalf("an oversize request must fall back, got %d characters", len(got))
 	}
 }

@@ -100,10 +100,12 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Title     string `json:"terminal_title_stripped"`
 			Cwd       string `json:"cwd"`
 			// Set by a Herdr server that supervises agents; an older server leaves them out.
-			Supervisor string `json:"supervisor_pane_id"`
-			Pending    int    `json:"pending_deliveries"`
-			Stalled    *int   `json:"stalled_secs"`
-			Blocker    string `json:"blocker"`
+			Supervisor string   `json:"supervisor_pane_id"`
+			Pending    int      `json:"pending_deliveries"`
+			Stalled    *int     `json:"stalled_secs"`
+			Blocker    string   `json:"blocker"`
+			Lines      []string `json:"blocker_lines"`
+			Dialog     string   `json:"dialog"`
 		} `json:"agents"`
 	}
 	var panes struct {
@@ -185,6 +187,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
 			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane],
 			Supervisor: a.Supervisor, Repo: repo, Pending: a.Pending, Stalled: a.Stalled != nil, Blocker: a.Blocker,
+			BlockerLines: a.Lines, Dialog: a.Dialog,
 		})
 	}
 	return s, nil

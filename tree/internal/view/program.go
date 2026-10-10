@@ -375,7 +375,7 @@ func menuTitle(n *model.Node, count int) string {
 	if n.Focus == model.KindPane {
 		pane = n.ID
 	}
-	if pane != "" && len(n.Answers) > 0 {
+	if pane != "" && n.Dialog != "" && len(n.Answers) > 0 {
 		if title, ok := answerMenuTitle(n, pane); ok {
 			return title
 		}
@@ -383,23 +383,44 @@ func menuTitle(n *model.Node, count int) string {
 	return fmt.Sprintf("%s;%s;%d;%s;%s", menuRequest, menuTarget(n), count, pane, n.Tag)
 }
 
-// answerMenuTitle is the request for the menu of a blocked row, with the answers of its dialog.
+// maxMenuTitle is the most characters a menu request can have. Herdr keeps 256 characters of a
+// pane title, and a request that is cut does not parse.
+const maxMenuTitle = 250
+
+// minAnswerRunes is the least text an answer keeps when a request is made to fit.
+const minAnswerRunes = 6
+
+// answerMenuTitle is the request for the menu of a blocked row, with the answers of its dialog:
+// "herdr-menu2;" and a JSON object. The keys are one letter each to save room: t and i name what
+// the row shows, p is the pane of its agent, l its label, d the dialog, and a the answers as
+// [key, text] pairs. Answer text is cut until the request fits; when it cannot fit, there is none.
 func answerMenuTitle(n *model.Node, pane string) (string, bool) {
 	kind, id, _ := strings.Cut(menuTarget(n), ";")
-	var b strings.Builder
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	err := enc.Encode(struct {
-		Kind    string         `json:"kind"`
-		ID      string         `json:"id"`
-		Pane    string         `json:"agent_pane"`
-		Label   string         `json:"label"`
-		Answers []model.Answer `json:"answers"`
-	}{kind, id, pane, n.Tag, n.Answers})
-	if err != nil {
-		return "", false
+	for limit := model.MaxAnswerRunes; limit >= minAnswerRunes; limit -= 2 {
+		pairs := make([][2]string, len(n.Answers))
+		for i, a := range n.Answers {
+			pairs[i] = [2]string{a.Key, cut(a.Text, limit)}
+		}
+		var b strings.Builder
+		enc := json.NewEncoder(&b)
+		enc.SetEscapeHTML(false)
+		err := enc.Encode(struct {
+			Kind    string      `json:"t"`
+			ID      string      `json:"i"`
+			Pane    string      `json:"p"`
+			Label   string      `json:"l"`
+			Dialog  string      `json:"d"`
+			Answers [][2]string `json:"a"`
+		}{kind, id, pane, n.Tag, n.Dialog, pairs})
+		if err != nil {
+			return "", false
+		}
+		title := answerMenuRequest + ";" + strings.TrimSpace(b.String())
+		if len([]rune(title)) <= maxMenuTitle {
+			return title, true
+		}
 	}
-	return answerMenuRequest + ";" + strings.TrimSpace(b.String()), true
+	return "", false
 }
 
 // menuTarget names what a row stands for on screen, as "<kind>;<id>". A group row has no menu.

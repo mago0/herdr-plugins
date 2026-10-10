@@ -88,8 +88,13 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
 - The menu of a blocked Claude Code row starts with the answers of its dialog, such as
   `Answer: 1. Yes`. An answer presses that number in the agent's pane. The answers are there only
   when the dialog numbers its choices from 1 with no gap; a dialog with no numbers, such as the
-  folder trust prompt, gets none, and you answer it in its pane. For such a row the title is
-  `herdr-menu2;` and a JSON object with `kind`, `id`, `agent_pane`, `label` and `answers`.
+  folder trust prompt, gets none, and you answer it in its pane. The answers are below `Rename`
+  and `Close`, so Enter in a menu that just opened never picks one. Herdr presses the number only
+  when the agent still shows the same dialog, and tells you when it does not. For such a row the
+  title is `herdr-menu2;` and a JSON object with one-letter keys, because Herdr keeps 256
+  characters of a pane title: `t` and `i` name what the row shows, `p` is the pane of its agent,
+  `l` its label, `d` the dialog name from the agent record, and `a` the answers as `[key, text]`
+  pairs. The pane cuts answer text until the title fits.
 - The keys reach it only after the fork's `focus_sidebar` keybind.
 - The fork's `next_workspace` and `previous_workspace` keybinds (`next_agent` and `previous_agent`
   in the agents section) move the focus one row down or up the tree. The fork sends the pane the

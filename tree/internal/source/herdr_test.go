@@ -224,7 +224,8 @@ func TestSnapshotReadsWhatHerdrKnowsAboutSupervision(t *testing.T) {
 		"agent.list": `{"id":"tree","result":{"agents":[
 			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude","pending_deliveries":2},
 			{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent":"claude","agent_status":"blocked",
-			 "supervisor_pane_id":"w1:p1","stalled_secs":640,"blocker":"Allow? / 1. Yes"}]}}`,
+			 "supervisor_pane_id":"w1:p1","stalled_secs":640,"blocker":"Allow? / 1. Yes",
+			 "blocker_lines":["Allow?","1. Yes"],"dialog":"d1a109"}]}}`,
 		"pane.list": `{"id":"tree","result":{"panes":[]}}`,
 	})
 	got, err := Snapshot(s)
@@ -237,6 +238,9 @@ func TestSnapshotReadsWhatHerdrKnowsAboutSupervision(t *testing.T) {
 	}
 	if worker.Supervisor != "w1:p1" || !worker.Stalled || worker.Blocker != "Allow? / 1. Yes" || worker.Pending != 0 {
 		t.Fatalf("worker = %+v", worker)
+	}
+	if worker.Dialog != "d1a109" || len(worker.BlockerLines) != 2 || worker.BlockerLines[1] != "1. Yes" {
+		t.Fatalf("worker dialog = %q, lines = %q", worker.Dialog, worker.BlockerLines)
 	}
 }
 

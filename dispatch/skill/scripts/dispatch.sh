@@ -186,6 +186,23 @@ launch_ready() {
   done
 }
 
+# Close the parent workspace Herdr opened on <repo root> for a dispatch, once it is unused:
+# marked dispatch-made, no linked worktree workspace left, one pane, no agent.
+close_idle_parent() {  # <repo path>
+  local root list parent
+  root=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
+  root=$(dirname "$root")
+  list=$(herdr workspace list 2>/dev/null) || return 0
+  [ "$(jq --arg k "$root/.git" '[.result.workspaces[]? | select(.worktree.repo_key == $k and .worktree.is_linked_worktree)] | length' <<<"$list")" = 0 ] || return 0
+  parent=$(jq -r --arg root "$root" 'first(.result.workspaces[]? | select(.worktree.checkout_path == $root
+      and .worktree.is_linked_worktree == false and .pane_count == 1) | .workspace_id) // empty' <<<"$list")
+  [ -n "$parent" ] || return 0
+  [ "$(herdr workspace get "$parent" 2>/dev/null | jq -r '.result.workspace.tokens.dispatch_parent // empty')" = 1 ] || return 0
+  [ "$(herdr agent list 2>/dev/null | jq --arg w "$parent" '[.result.agents[]? | select(.workspace_id == $w)] | length')" = 0 ] || return 0
+  # A plain close: Herdr refuses it if the group still has a worktree workspace.
+  herdr workspace close "$parent" >/dev/null 2>&1 || true
+}
+
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
 release_worker() {
   local agent=$1 D=$2 ws out E
@@ -203,6 +220,7 @@ release_worker() {
   [ -n "$ws" ] || { echo "dispatch.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0; }
   if out=$(herdr worktree remove --workspace "$ws" 2>&1); then
     ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .released = $ts else . end)'
+    close_idle_parent "$(jq -r '.launch.repo // empty' <<<"$E")"
   else
     echo "dispatch.sh: warning: release of $agent failed: $out" >&2
     echo "dispatch.sh: inspect the worktree, then: herdr worktree remove --workspace $ws --force" >&2

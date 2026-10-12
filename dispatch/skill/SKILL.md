@@ -107,7 +107,7 @@ To type one line into an agent from any process: `herdr agent deliver <agent|pan
 
 - `ack --decision release` is the normal path. To sweep a worker by hand: `WS=$(herdr agent get <agent> | jq -r .result.agent.workspace_id); herdr worktree remove --workspace "$WS"` - resolve now, never from an old receipt.
 - Removing a worktree **kills a live agent without asking**. The branch stays; delete it separately if it is not needed.
-- **Never close the repo's parent workspace** (the one Herdr opens on the main checkout). A plain close is refused with `workspace_group_close_required`; never bypass that with `workspace close --group`, which closes every worktree workspace and its agent.
+- **Never close the repo's parent workspace by hand** (the one Herdr opens on the main checkout). Release closes a dispatch-made parent after its last worktree is removed. A plain close is refused with `workspace_group_close_required`; never bypass that with `workspace close --group`, which closes every worktree workspace and its agent.
 - Only remove worktrees this session dispatched unless the user asks for a sweep. Do not end the session with a settled attempt still owing a decision: `ps` shows `worker_done` attention until it is acked.
 
 ## 4. Writing tasks

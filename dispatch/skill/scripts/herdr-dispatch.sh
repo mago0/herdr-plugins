@@ -78,6 +78,13 @@ if [ -z "$WT_EXISTS" ] && ! git -C "$ROOT" show-ref --verify --quiet "refs/heads
   fi
 fi
 
+# The workspace open on the main checkout, which Herdr makes the parent of the worktree's group.
+parent_ws() {
+  herdr workspace list 2>/dev/null | jq -r --arg root "$ROOT" \
+    'first(.result.workspaces[]? | select(.worktree.checkout_path == $root and .worktree.is_linked_worktree == false) | .workspace_id) // empty' 2>/dev/null || true
+}
+PARENT_BEFORE=$(parent_ws)
+
 if [ -n "$WT_EXISTS" ]; then
   OUT=$(herdr worktree open --cwd "$ROOT" --path "$WT" --label "$NAME" --no-focus)
 else
@@ -89,9 +96,12 @@ fi
 PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
 WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
 
-# Herdr also opens the main checkout as a parent workspace. This script never closes it:
-# a plain close is refused with `workspace_group_close_required`, and `--group` would take
-# every worktree workspace and its agent with it.
+# Herdr also opens the main checkout as a parent workspace when none is open. The token marks
+# that parent as dispatch-made, so `dispatch.sh` release closes it after its last worktree.
+if [ -z "$PARENT_BEFORE" ]; then
+  PARENT=$(parent_ws)
+  [ -z "$PARENT" ] || herdr workspace report-metadata "$PARENT" --source dispatch --token dispatch_parent=1 >/dev/null 2>&1 || true
+fi
 
 PROMPT=$(cat "$PROMPT_FILE")
 MAIL="$(cd "$(dirname "$0")" && pwd)/mail.sh"

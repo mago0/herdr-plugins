@@ -174,7 +174,7 @@ func workerTag(n *model.Node) string {
 
 // repoLine is the second line of a row: the worktree glyph for a linked worktree, the repo with its
 // branch, and the distance of the branch from its base. room is the cells it can take, or 0 for no
-// limit; the branch is cut before the repo, and the counts are kept whole.
+// limit; the branch is cut, then left out, then the repo is cut, and the counts are kept whole.
 func repoLine(n *model.Node, room int, th Theme) string {
 	glyph := ""
 	if n.Worktree {
@@ -191,11 +191,15 @@ func repoLine(n *model.Node, room int, th Theme) string {
 	}
 	if room > 0 {
 		room -= lipgloss.Width(glyph) + lipgloss.Width(tail)
-		if branch == "" {
-			name = cut(name, max(minLabel, room))
-		} else {
-			name = cut(name, max(minLabel, room-1-minLabel))
+		if branch != "" && lipgloss.Width(name)+1+lipgloss.Width(branch) > room {
 			branch = cut(branch, max(minLabel, room-1-lipgloss.Width(name)))
+			// With no room for the repo and a short branch, the branch goes before the counts do.
+			if lipgloss.Width(name)+1+lipgloss.Width(branch) > room {
+				branch = ""
+			}
+		}
+		if branch == "" {
+			name = cut(name, max(1, room))
 		}
 	}
 	if branch != "" {

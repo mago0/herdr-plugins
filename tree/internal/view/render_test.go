@@ -179,3 +179,20 @@ func TestCutLeftKeepsTheEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderKeepsTheCountsAndReportedInANarrowPane(t *testing.T) {
+	job := &model.Node{ID: "w2:p1", Label: "job", Status: model.Idle, Shown: model.KindPane, Worker: true, Reported: true,
+		Repo: "job-scheduler", Worktree: true,
+		Git: model.Git{Repo: "job-scheduler", Branch: "sre-194-watchdog-no-sidecar", Ahead: 1, Behind: 2}}
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Idle, Shown: model.KindPane, Children: []*model.Node{job}}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	tree := model.Tree{Roots: []*model.Node{main}}
+	for width, want := range map[int]string{
+		50: sp(9) + "⎇ job-scheduler@sre-194-… -2 +1  reported",
+		30: sp(9) + "⎇ jo… -2 +1  reported",
+	} {
+		if got := Render(Rows(tree, State{}), width, -1, plain())[3]; got != want {
+			t.Errorf("width %d:\n got %q\nwant %q", width, got, want)
+		}
+	}
+}

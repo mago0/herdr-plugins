@@ -59,3 +59,24 @@ func TestLedgerDirFollowsXDGStateHome(t *testing.T) {
 		t.Fatalf("LedgerDir = %q", got)
 	}
 }
+
+func TestSettledIsClearedByAFollowUpAfterTheSettle(t *testing.T) {
+	dir := t.TempDir()
+	writeLedger(t, dir, "r1", `[
+		{"pane_id":"w1:p1","agent":"later","status":"settled","started":"2026-10-19T09:00:00Z","settled":"2026-10-19T10:00:00Z"},
+		{"pane_id":"w2:p1","agent":"earlier","status":"settled","started":"2026-10-19T09:00:00Z","settled":"2026-10-19T10:00:00Z"}]`)
+	inbox := func(agent, body string) {
+		os.MkdirAll(filepath.Join(dir, "r1", "workers", agent), 0o755)
+		os.WriteFile(filepath.Join(dir, "r1", "workers", agent, "inbox.jsonl"), []byte(body), 0o644)
+	}
+	inbox("later", `{"id":"m1","ts":"2026-10-19T11:00:00Z","from":"supervisor","type":"followup","subject":"more"}`+"\n")
+	inbox("earlier", `{"id":"m2","ts":"2026-10-19T08:00:00Z","from":"supervisor","type":"followup","subject":"first"}`+"\n"+
+		`{"id":"m3","ts":"2026-10-19T11:00:00Z","from":"supervisor","type":"reply","subject":"answer"}`+"\n")
+	got := Settled(dir)
+	if got["w1:p1"] {
+		t.Error("a follow-up after the settle is new work whose result the supervisor has not taken")
+	}
+	if !got["w2:p1"] {
+		t.Error("a follow-up before the settle, or a reply, leaves the worker reported")
+	}
+}

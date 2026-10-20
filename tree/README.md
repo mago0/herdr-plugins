@@ -128,7 +128,7 @@ A row has an envelope and a count after its name when Herdr holds prompts for th
 
 The counts after a branch are `-N` for commits behind and `+N` for commits ahead. A count of zero is not shown, and a branch with nothing to count against has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the pane does not fetch, and it asks Git again every 10 seconds.
 
-`reported` comes from the [dispatch](../dispatch/) ledgers in `$XDG_STATE_HOME/agent-dispatch/runs` (`~/.local/state/agent-dispatch/runs` by default): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`. It goes away while the worker is working again.
+`reported` comes from the [dispatch](../dispatch/) ledgers in `$XDG_STATE_HOME/agent-dispatch/runs` (`~/.local/state/agent-dispatch/runs` by default): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`, and the supervisor has sent it no follow-up since (`dispatch.sh send`). It is not shown while the worker is working.
 
 ## Labels
 

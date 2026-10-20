@@ -82,8 +82,7 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 				after = "  " + rollup(r.Rollup, th)
 			}
 		case n.Shown == model.KindShell:
-			head += th.paint(th.ShellGlyph+" ", faint)
-			style = faint
+			head += th.shell() + " "
 		default:
 			head += th.dot(state(n)) + " "
 			if n.Pending > 0 {
@@ -143,7 +142,7 @@ func rollup(states []string, th Theme) string {
 	out := make([]string, len(states))
 	for i, s := range states {
 		if s == RollupShell {
-			out[i] = th.paint(th.ShellGlyph, faint)
+			out[i] = th.shell()
 		} else {
 			out[i] = th.dot(s)
 		}
@@ -257,11 +256,12 @@ func lead(r Row) string {
 	return b + "├ "
 }
 
-// below is what comes before the second line of a row: the indent of an effort's panes, or the
-// branch line of a worker running on to the next worker.
+// below is what comes before the second line of a row: under an effort, the indent of its name,
+// so the repo reads as part of the heading and not as a pane; under a worker, its branch line
+// running on to the next worker.
 func below(r Row) string {
 	if r.Depth == 0 {
-		return "    "
+		return "  "
 	}
 	b := "    " + guides(r.Trunk)
 	if r.Last {

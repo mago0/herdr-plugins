@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mago0/herdr-plugins/tree/internal/model"
+	"github.com/muesli/termenv"
 )
 
 func plain() Theme {
@@ -38,7 +39,7 @@ func gke() model.Tree {
 func TestRenderAnEffort(t *testing.T) {
 	same(t, Render(Rows(gke(), State{}), 44, -1, plain()), []string{
 		" ▾ GKE Migration" + sp(22) + "proj ↗",
-		sp(5) + "flosports@main",
+		sp(3) + "flosports@main",
 		sp(5) + "$ Status",
 		"   ▾ o HANDOFF.md resume",
 		sp(5) + "└ o SRE-194 job scheduler" + sp(7) + "SRE-194",
@@ -216,4 +217,20 @@ func TestRenderAFoldedAgentShowsTheDotsOfItsWorkers(t *testing.T) {
 		"     * Dispatch",
 		"   ▾ o SRE Review Monitor",
 	})
+}
+
+func TestRenderAShellIsNotDimAndItsGlyphHasItsColor(t *testing.T) {
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(termenv.Ascii) })
+	th := DefaultTheme()
+	e := &model.Node{ID: "w1", Label: "ops", Shown: model.KindWorkspace,
+		Children: []*model.Node{{ID: "w1:p2", Label: "Status", Shown: model.KindShell}}}
+	line := Render(Rows(model.Tree{Roots: []*model.Node{e}}, State{}), 0, -1, th)[1]
+	if strings.Contains(line, faint.Render("Status")) {
+		t.Errorf("a shell is a pane to use, not dim text: %q", line)
+	}
+	glyph := lipgloss.NewStyle().Foreground(lipgloss.Color(th.Colors["shell"])).Render(th.ShellGlyph)
+	if th.Colors["shell"] == "" || !strings.Contains(line, glyph) {
+		t.Errorf("the shell glyph has the shell color %q: %q", th.Colors["shell"], line)
+	}
 }

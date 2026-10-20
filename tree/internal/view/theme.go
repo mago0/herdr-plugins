@@ -36,6 +36,8 @@ func DefaultTheme() Theme {
 			model.Idle:    "#89b4fa",
 			model.Unknown: "#6c7086",
 			Stalled:       "#fab387",
+			// The glyph of a shell row, apart from the state colors of agents.
+			"shell": "#cba6f7",
 		},
 		ShellGlyph:    "$",
 		WorktreeGlyph: "\ue0a0",
@@ -104,6 +106,11 @@ func (th Theme) dot(status string) string {
 		g = "·"
 	}
 	return lipgloss.NewStyle().Foreground(lipgloss.Color(th.Colors[status])).Render(g)
+}
+
+// shell draws the glyph of a shell row in its own color.
+func (th Theme) shell() string {
+	return th.paint(th.ShellGlyph, lipgloss.NewStyle().Foreground(lipgloss.Color(th.Colors["shell"])))
 }
 
 func (th Theme) paint(s string, st lipgloss.Style) string {

@@ -113,8 +113,8 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The pane then changes in the
 
 ## What a row is
 
-- **Effort:** one for each workspace, in Herdr's order. The name is bold. The right edge shows the label and link of the workspace's first agent: `SRE-923 ↗` for an issue, `proj ↗` for a Linear project. The line under it is the repo and branch, with the commits ahead of and behind the upstream.
-- **Shell:** a pane with no agent, marked `$`. It shows the pane's name, or where it is: `<repo>/<path>` inside a repository, else the path from `~`.
+- **Effort:** one for each workspace, in Herdr's order. The name is bold. The right edge shows the label and link of the workspace's first agent: `SRE-923 ↗` for an issue, `proj ↗` for a Linear project. The line under it, at the column of the name, is the repo and branch, with the commits ahead of and behind the upstream.
+- **Shell:** a pane with no agent, marked with a `$` in its own color. It shows the pane's name, or where it is: `<repo>/<path>` inside a repository, else the path from `~`.
 - **Agent:** a pane with an agent. It shows the state dot and the name of its tab, when the tab has a name you gave it and no other agent. Otherwise it shows the title the session set, else the agent's name or kind.
 - **Worker:** an agent that an agent in another workspace supervises. It hangs from a branch line under that agent's dot. The right edge shows its label, else the number of the pull request it links. The line under it is the worktree glyph for a linked worktree, the repo and branch, the commits ahead of and behind `origin/HEAD`, and `reported` once its supervisor took its result. The worker's own shells follow, at its text column.
 
@@ -174,6 +174,8 @@ working = "#f9e2af"
 done = "#a6e3a1"
 idle = "#89b4fa"
 unknown = "#6c7086"
+# The $ of a shell row.
+shell = "#cba6f7"
 # The repository line.
 repo = "#94e2d5"
 ```

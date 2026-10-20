@@ -251,23 +251,3 @@ e ops
   a b
 `)
 }
-
-func TestBuildMarksTheRowsOfAnAutomation(t *testing.T) {
-	run := ag("w1:p2", "")
-	run.TabID = "w1:t2"
-	s := Snapshot{
-		Workspaces: []Workspace{ws("w1", "ops", "", 1), {ID: "w2", Label: "auto: daily summary", Number: 2, Status: Idle}},
-		Tabs:       []Tab{{ID: "w1:t2", WorkspaceID: "w1", Label: "auto: flostag-watch 2026-10-20 00:07"}},
-		Agents:     []Agent{ag("w1:p1", "lead"), run},
-	}
-	got := Build(s)
-	check(t, got, `
-e ops
-  a lead
-  a flostag-watch
-e daily summary
-`)
-	if !got.Roots[0].Children[1].Auto || got.Roots[0].Children[0].Auto || !got.Roots[1].Auto {
-		t.Fatalf("auto = %v %v %v", got.Roots[0].Children[1].Auto, got.Roots[0].Children[0].Auto, got.Roots[1].Auto)
-	}
-}

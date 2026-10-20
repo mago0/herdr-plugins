@@ -62,10 +62,10 @@ func Build(s Snapshot) Tree {
 		if a.Status == Blocked && a.Dialog != "" {
 			answers = Answers(a.Kind, a.BlockerLines)
 		}
-		label, auto := AgentLabel(a), false
+		label := AgentLabel(a)
 		// The user names a tab for the job in it; Herdr numbers the tabs that have no name.
-		if name, isAuto := AutoName(tabName[a.TabID]); inTab[a.TabID] == 1 && strings.Trim(name, "0123456789") != "" {
-			label, auto = name, isAuto
+		if name := tabName[a.TabID]; inTab[a.TabID] == 1 && strings.Trim(name, "0123456789") != "" {
+			label = name
 		}
 		_, worker := up[a.PaneID]
 		nodes[a.PaneID] = &Node{
@@ -73,7 +73,7 @@ func Build(s Snapshot) Tree {
 			Label: label, Status: a.Status, Repo: repo, Where: a.Where, Worktree: a.Worktree,
 			Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link, Pending: a.Pending, Stalled: a.Stalled,
 			Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
-			Worker: worker, Reported: a.Reported && a.Status != Working, Auto: auto,
+			Worker: worker, Reported: a.Reported && a.Status != Working,
 		}
 	}
 	for _, a := range visible {
@@ -118,10 +118,9 @@ func Build(s Snapshot) Tree {
 			first.Children = append(append([]*Node(nil), shells[w.ID]...), first.Children...)
 			continue
 		}
-		label, auto := AutoName(w.Label)
 		e := &Node{
-			ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID, Auto: auto,
-			Label: label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
+			ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
+			Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
 		}
 		if len(own) > 0 {
 			e.Tag, e.Link = own[0].Tag, own[0].Link

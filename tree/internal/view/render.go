@@ -78,9 +78,6 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		switch {
 		case r.Depth == 0:
 			style, right = bold, effortTag(n)
-			if n.Auto {
-				head += th.paint(th.AutoGlyph+" ", faint)
-			}
 			if r.Folded {
 				after = "  " + rollup(r.Rollup, th)
 			}
@@ -88,9 +85,6 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 			head += th.shell() + " "
 		default:
 			head += th.dot(state(n)) + " "
-			if n.Auto {
-				head += th.paint(th.AutoGlyph+" ", faint)
-			}
 			if n.Pending > 0 {
 				after = " " + th.paint(th.pending(n.Pending), faint)
 			}

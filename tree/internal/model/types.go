@@ -114,8 +114,6 @@ type Node struct {
 	// Dialog names that dialog, so that Herdr can refuse an answer for a dialog that is gone.
 	Answers []Answer
 	Dialog  string
-	// Auto is true for the workspace or tab of a herdr-automations run.
-	Auto bool
 	// Worker is true for an agent that an agent in another workspace supervises.
 	Worker bool
 	// Reported is true for a worker whose result its supervisor took and that is not working again.

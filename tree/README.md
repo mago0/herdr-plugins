@@ -120,8 +120,6 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The pane then changes in the
 
 Within an effort the shells come first, then each agent followed by its workers. A workspace whose agents are all workers is not an effort: its shells show under its first worker. A supervisor in the same workspace does not make a worker. A worker whose supervisor is gone is an agent of its own workspace again.
 
-A workspace or tab that [herdr-automations](https://github.com/DnzzL/herdr-automations) opened shows the automation's name with `◷` in front, without the `auto: ` prefix and the time.
-
 A folded effort is one line with a dot for each of its agents and workers, or `$` when it has only shells. An agent with workers folds the same way: its workers go, and their dots follow its name. Click the fold mark left of the dot, or press space on the row. Folds are saved.
 
 The state dot of a row is orange (`~` in plain text) when the agent reports working and its screen has not changed for the time Herdr allows (`session.agent_stall_after_secs`, 600 by default). The color is `stalled` under `[colors]`.
@@ -167,7 +165,6 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source my-loop --token tree=hide
 [glyphs]
 # The default worktree and pending glyphs are Nerd Font icons. These work in any font.
 shell = "$"
-auto = "◷"
 worktree = "⎇"
 pending = "+"
 

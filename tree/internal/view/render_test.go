@@ -235,17 +235,14 @@ func TestRenderAShellIsNotDimAndItsGlyphHasItsColor(t *testing.T) {
 	}
 }
 
-func TestRenderAnAgentElsewhereAndAnAutomation(t *testing.T) {
-	run := &model.Node{ID: "w1:p2", Label: "flostag-watch", Status: model.Idle, Shown: model.KindPane, Auto: true,
+func TestRenderAnAgentThatWorksElsewhere(t *testing.T) {
+	run := &model.Node{ID: "w1:p2", Label: "auto: flostag-watch 2026-10-20 00:07", Status: model.Idle, Shown: model.KindPane,
 		Repo: "job-scheduler", Git: model.Git{Repo: "job-scheduler", Branch: "main", Behind: 19}}
-	e := &model.Node{ID: "w1", Label: "daily", Shown: model.KindWorkspace, Auto: true, Repo: "flosports",
-		Children: []*model.Node{run}}
-	th := plain()
-	th.AutoGlyph = "@"
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{e}}, State{}), 0, -1, th), []string{
-		" ▾ @ daily",
+	e := &model.Node{ID: "w1", Label: "ops", Shown: model.KindWorkspace, Repo: "flosports", Children: []*model.Node{run}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{e}}, State{}), 0, -1, plain()), []string{
+		" ▾ ops",
 		"   flosports",
-		"     o @ flostag-watch",
+		"     o auto: flostag-watch 2026-10-20 00:07",
 		sp(7) + "job-scheduler@main -19",
 	})
 }

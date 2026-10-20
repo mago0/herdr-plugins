@@ -85,9 +85,7 @@ type Kind int
 
 const (
 	KindPane Kind = iota
-	KindTab
 	KindWorkspace
-	KindGroup
 	// KindShell is a pane with no agent.
 	KindShell
 )
@@ -125,7 +123,5 @@ type Node struct {
 
 // Tree is the built view: one effort for each workspace that has its own agent or no agent.
 type Tree struct {
-	Roots   []*Node
-	NoAgent []*Node
-	Hidden  []*Node
+	Roots []*Node
 }

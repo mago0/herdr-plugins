@@ -130,7 +130,6 @@ func TestFocusByKind(t *testing.T) {
 		params string
 	}{
 		{model.Node{ID: "w1:p1", Focus: model.KindPane}, "pane.focus", `{"pane_id":"w1:p1"}`},
-		{model.Node{ID: "w1:t2", Focus: model.KindTab}, "tab.focus", `{"tab_id":"w1:t2"}`},
 		{model.Node{ID: "w1", Focus: model.KindWorkspace}, "workspace.focus", `{"workspace_id":"w1"}`},
 	}
 	for _, c := range cases {
@@ -142,8 +141,8 @@ func TestFocusByKind(t *testing.T) {
 			t.Errorf("Focus(%s) = %s %s, want %s %s", c.n.ID, r.method, r.params, c.method, c.params)
 		}
 	}
-	if err := Focus(&recorder{}, &model.Node{Focus: model.KindGroup}); err == nil {
-		t.Error("a group row has nothing to focus")
+	if err := Focus(&recorder{}, &model.Node{Focus: model.Kind(99)}); err == nil {
+		t.Error("a row of no known kind has nothing to focus")
 	}
 }
 

@@ -223,8 +223,6 @@ func Focus(c Caller, n *model.Node) error {
 	switch n.Focus {
 	case model.KindPane:
 		return c.Call("pane.focus", map[string]string{"pane_id": n.ID}, nil)
-	case model.KindTab:
-		return c.Call("tab.focus", map[string]string{"tab_id": n.ID}, nil)
 	case model.KindWorkspace:
 		return c.Call("workspace.focus", map[string]string{"workspace_id": n.ID}, nil)
 	}

@@ -1,31 +1,33 @@
 # tree
 
-Agents in [Herdr](https://herdr.dev) as a tree by supervisor.
+The [Herdr](https://herdr.dev) sidebar section that shows each workspace as an effort: the shells and agents in it, and under each agent the workers it dispatched to other workspaces, each with its state.
 
-Herdr's sidebar groups workspaces by repository. Supervised work has another shape: one agent dispatches workers into several repositories, and a worker can dispatch its own. This pane shows each agent under the agent that started it, with its state, and jumps to the one you select.
+An effort is one piece of work, such as a ticket or a project. Its parent agent often works across several repositories, and sends a large subtask to a worker in its own workspace and worktree. The worker reports its result back to the parent. This pane keeps those workers under the agent that dispatched them, so the whole effort stays in view.
 
 ```
- ▾ ● ops
-   │ ops@main +2
-   ├─ ● review monitor ⇥
-   │  ├─ ● review-86
-   │  │    iam ⎇
-   │  └─ ● review-234
-   │       billing ⎇
-   └─ ● planning ⇥
-      └─ ● add-probe
-           api ⎇
- ▾ ● platform migration
-   ├─ ● add-vpc-routes
-   │    infra ⎇
-   └─ ● migrate-scheduler
-      │ scheduler
-      └─ ● build-images ⇥
- ▸ No agent (8)
- ▸ Hidden (7)
+ ▾ GKE Migration                      proj ↗
+     flosports@main
+     $ Status
+     ● HANDOFF.md resume
+     └ ● SRE-194 job scheduler      SRE-194
+          job-scheduler@sre-194-watchdog-n…
+         $ shepherd
+
+ ▾ Main
+     flosports@main
+     ● Herdr left pane view layout mockup
+     ● Infra review conventions update
+     ├ ● review-continue-watching-79     #79
+     │    continue-watching@effect-local-ex…
+     │   $ reviewr
+     └ ● Review infra base services    #1102
+          infra-base-services@jordangarri…
+         $ reviewr
+
+ ▸ Core PHP8.3 Upgrade  ● ●       SRE-923 ↗
 ```
 
-The supervisor of each worker comes from Herdr: the `supervisor_pane_id` of the agent, which `herdr pane supervise` sets and `herdr agent start` sets for an agent started from another pane. The [dispatch](../dispatch/) plugin sets it for each worker. On a Herdr server without that field, every agent is a root and the pane is a flat list with states.
+The supervisor of each worker comes from Herdr: the `supervisor_pane_id` of the agent, which `herdr pane supervise` sets and `herdr agent start` sets for an agent started from another pane. The [dispatch](../dispatch/) plugin sets it for each worker. On a Herdr server without that field, no agent is a worker and each workspace lists its own agents.
 
 ## Install
 
@@ -42,7 +44,7 @@ Bind a key in `~/.config/herdr/config.toml`:
 key = "prefix+t"
 type = "shell"
 command = "herdr plugin pane open --plugin herdr-tree --entrypoint tree --placement popup"
-description = "open supervisor tree"
+description = "open efforts"
 ```
 
 Use `--placement split` or `tab` for a view that stays open.
@@ -52,11 +54,10 @@ Use `--placement split` or `tab` for a view that stays open.
 | Key | Action |
 |---|---|
 | `↑` `↓`, `k` `j` | Move. |
-| `shift+↑` `shift+↓` | Move the row one place among the rows beside it. |
+| `shift+↑` `shift+↓` | Move the effort under the cursor one place in Herdr's workspace order. |
 | `o` | Open the link of the row in the browser, when the row has one. |
-| `enter` | Go to the selected agent and close. On a group, fold or unfold. |
-| `space` | Fold or unfold. A folded row shows one dot for each agent below it. |
-| `a` | Show only agents that are blocked or done, with the rows above them. |
+| `enter` | Go to the selected effort, agent or shell, and close. |
+| `space` | Fold or open the effort under the cursor. |
 | `q`, `esc` | Close. |
 
 ## As a sidebar section
@@ -72,28 +73,27 @@ plugin = "herdr-tree:tree"   # "" gives the native spaces list back
 plugin = ""                  # the agents section takes a plugin the same way
 ```
 
-Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in these ways:
+Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The pane then changes in these ways:
 
 - It shows only the rows. Herdr draws the section title.
 - It stays open: `q` and `esc` do nothing, and a jump does not close it.
 - The cursor follows the pane that Herdr has in focus.
-- A click on a row jumps to it. A click on the part before the state dot folds a row that has
-  children. The wheel scrolls.
+- A click on a row jumps to it: an effort row to its workspace, any other row to its pane. A
+  click on the fold mark of an effort folds or opens it. The wheel scrolls.
 - Ctrl with a click opens the link of a row in the browser. A row has a link when its pane sets
   the `link` token to an `http` or `https` address
-  (`herdr pane report-metadata <pane> --source tree --token link=<url>`), and its label is then
-  underlined. The tree does not know what the address is for: an issue, a pull request, a run.
-- A drag moves a row among the rows beside it: the row takes the place of the row it is dropped
-  on. The move is that of the row's workspace in Herdr's order (`workspace.move_block`), so
-  Herdr keeps it, and the rows of one workspace move as one. A worker stays under its supervisor.
+  (`herdr pane report-metadata <pane> --source tree --token link=<url>`), and its right edge is
+  then underlined.
+- A drag moves an effort: it takes the place of the effort it is dropped on, and a drop on a pane
+  row is a drop on the effort that holds it. The move is that of the workspace in Herdr's order
+  (`workspace.move_block`), so Herdr keeps it. Pane rows do not move.
 - The last line is for the row under the pointer, or for the cursor row when the pointer is on no
   row or has not moved for five seconds. For a blocked row it says what the agent waits for, as
-  Herdr reads it from the agent's screen. For any other row it says where the row works:
-  `<repo>/<path in the repo>` for a linked Git worktree, else the path of the checkout.
-- A right-click on a row opens Herdr's menu for what the row shows: the workspace, the tab or
-  the pane. The pane names the row in its terminal title
+  Herdr reads it from the agent's screen. For any other row it says where the row works.
+- A right-click on a row opens Herdr's menu for what the row shows: the workspace for an effort,
+  the pane for any other row. The pane names the row in its terminal title
   (`herdr-menu;<kind>;<id>;<count>;<agent pane>;<label>`) and the fork opens the menu at the
-  pointer.
+  pointer. The agent pane is set only for an agent or worker row, so only those have `Label...`.
 - The menu of a blocked Claude Code row starts with the answers of its dialog, such as
   `Answer: 1. Yes`. An answer presses that number in the agent's pane. The answers are there only
   when the dialog numbers its choices from 1 with no gap; a dialog with no numbers, such as the
@@ -106,42 +106,41 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The tree then changes in the
   pairs. The pane cuts answer text until the title fits.
 - The keys reach it only after the fork's `focus_sidebar` keybind.
 - The fork's `next_workspace` and `previous_workspace` keybinds (`next_agent` and `previous_agent`
-  in the agents section) move the focus one row down or up the tree. The fork sends the pane the
-  keys `F20` and `F19` (`ESC [ 19 ; 2 ~` and `ESC [ 18 ; 2 ~`). A step starts from the row of the
-  pane in focus, skips the group rows and the rows of a folded parent, and wraps at the ends.
+  in the agents section) move the focus to the next or previous agent or worker row. The fork
+  sends the pane the keys `F20` and `F19` (`ESC [ 19 ; 2 ~` and `ESC [ 18 ; 2 ~`). A step starts
+  from the row of the pane in focus, skips effort and shell rows and the rows of a folded effort,
+  and wraps at the ends.
 
 ## What a row is
 
-A row is one pane that hosts an agent. Terminals have no row.
+- **Effort:** one for each workspace, in Herdr's order. The name is bold. The right edge shows the label and link of the workspace's first agent: `SRE-923 ↗` for an issue, `proj ↗` for a Linear project. The line under it is the repo and branch, with the commits ahead of and behind the upstream.
+- **Shell:** a pane with no agent, marked `$`. It shows the pane's name, or where it is: `<repo>/<path>` inside a repository, else the path from `~`.
+- **Agent:** a pane with an agent. It shows the state dot and the title the session set, else the agent's name or kind.
+- **Worker:** an agent that an agent in another workspace supervises. It hangs from a branch line under that agent's dot. The right edge shows its label, else the number of the pull request it links. The line under it is the worktree glyph for a linked worktree, the repo and branch, the commits ahead of and behind `origin/HEAD`, and `reported` once its supervisor took its result. The worker's own shells follow, at its text column.
 
-- A workspace with one agent is one row with the workspace's name.
-- A supervised agent in a tab of its supervisor's workspace is a row under its supervisor, marked with the tab glyph.
-- A workspace with supervising agents in several tabs is a row with one row for each tab under it.
-- A tab with several agents is a row with one row for each pane under it, marked with the pane glyph.
-- When one agent of such a tab is the only one that supervises workers, the tab's row is that agent. The other panes of the tab are rows under it, with its workers.
-- `No agent (n)` holds the workspaces with no agent. In practice these are the main checkouts that Herdr keeps as parents of worktree workspaces.
+Within an effort the shells come first, then each agent followed by its workers. A workspace whose agents are all workers is not an effort: its shells show under its first worker. A supervisor in the same workspace does not make a worker. A worker whose supervisor is gone is an agent of its own workspace again.
 
-The repository is on a second line under the name, in italics and its own color. A row has that line only when its checkout is not the one of the row it hangs from: another repository, another linked worktree, or the main checkout under a worktree. The rows are in Herdr's workspace order, then in tab bar order, so a new space is last and a space does not move when its agent starts to supervise.
+A folded effort is one line with a dot for each of its agents and workers, or `$` when it has only shells. Folds are saved.
 
 The state dot of a row is orange (`~` in plain text) when the agent reports working and its screen has not changed for the time Herdr allows (`session.agent_stall_after_secs`, 600 by default). The color is `stalled` under `[colors]`.
 
 A row has an envelope and a count after its name when Herdr holds prompts for that pane until it is safe to type them, for example a wake line for the pane you have in focus. The glyph is `pending` under `[glyphs]`.
 
-A row that works in a main checkout shows `<repo>@<branch>`, then `-N` for commits behind the upstream branch and `+N` for commits ahead. A count of zero is not shown, and a branch with no upstream has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the tree does not fetch, and it asks Git again every 10 seconds.
+The counts after a branch are `-N` for commits behind and `+N` for commits ahead. A count of zero is not shown, and a branch with nothing to count against has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the pane does not fetch, and it asks Git again every 10 seconds.
 
-A row that works in a linked Git worktree shows the repository and the worktree glyph, with no branch. For a workspace row this comes from Herdr. For a tab or pane row it comes from the agent's working directory. The last line of the pane names the worktree.
+`reported` comes from the [dispatch](../dispatch/) ledgers in `$XDG_STATE_HOME/agent-dispatch/runs` (`~/.local/state/agent-dispatch/runs` by default): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`. It goes away while the worker is working again.
 
 ## Labels
 
-A row can carry a short label at the right edge of its name line, such as a ticket key. It is the `label` token of the agent's pane, reported under the source `tree`, and the tree shows at most 12 cells of it.
+An effort or a worker can carry a short label at its right edge, such as a ticket key. It is the `label` token of the agent's pane, reported under the source `tree`, and the pane shows at most 12 cells of it. The `link` token is the web address of the issue or project.
 
 ```sh
-herdr pane report-metadata "$HERDR_PANE_ID" --source tree --token label=SRE-923
-herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label
+herdr pane report-metadata "$HERDR_PANE_ID" --source tree --token label=SRE-923 --token link=https://linear.app/<org>/issue/SRE-923
+herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label --clear-token link
 ```
 
-- In the fork's sidebar, the right-click menu of a row that is one agent has `Label...`. An empty text clears the label.
-- The `skill/` folder tells an agent to label its own pane when work starts on a ticket. Link it into your agent's skills directory:
+- In the fork's sidebar, the right-click menu of an agent or worker row has `Label...`. An empty text clears the label.
+- The `skill/` folder tells an agent to set its own label and link when work starts on a ticket or project. Link it into your agent's skills directory:
 
   ```sh
   root="$(herdr plugin list --plugin herdr-tree --json | jq -r '.result.plugins[0].plugin_root')"
@@ -152,7 +151,7 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label
 
 ## Panes that do not count
 
-A pane that sets the `tree=hide` token on itself is left out and counted in `Hidden (n)`. A watch loop needs no pane at all: run it as a Herdr job (`herdr job add`).
+A pane that sets the `tree=hide` token on itself is left out. A watch loop needs no pane at all: run it as a Herdr job (`herdr job add`).
 
 ```sh
 herdr pane report-metadata "$HERDR_PANE_ID" --source my-loop --token tree=hide
@@ -164,10 +163,10 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source my-loop --token tree=hide
 
 ```toml
 [glyphs]
-# The defaults are Nerd Font icons. These three work in any font.
-tab = "⇥"
-pane = "›"
+# The default worktree and pending glyphs are Nerd Font icons. These work in any font.
+shell = "$"
 worktree = "⎇"
+pending = "+"
 
 [colors]
 blocked = "#f38ba8"
@@ -181,11 +180,11 @@ repo = "#94e2d5"
 
 ## Use in scripts
 
-`tree --once` prints the tree as plain text and exits. States are `!` blocked, `*` working, `+` done, `o` idle, `·` unknown. It must run inside a Herdr pane.
+`tree --once` prints the efforts as plain text and exits. States are `!` blocked, `*` working, `+` done, `o` idle, `·` unknown. It must run inside a Herdr pane.
 
 ## Test
 
 ```sh
 go test ./...
-test/smoke.sh    # starts and stops its own Herdr server; needs tmux
+test/smoke.sh    # builds bin/tree, starts and stops its own Herdr server; needs tmux
 ```

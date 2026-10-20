@@ -602,8 +602,6 @@ func menuTarget(n *model.Node) string {
 	switch n.Shown {
 	case model.KindWorkspace:
 		return "workspace;" + n.WorkspaceID
-	case model.KindTab:
-		return "tab;" + n.TabID
 	case model.KindShell:
 		return "pane;" + n.ID
 	case model.KindPane:

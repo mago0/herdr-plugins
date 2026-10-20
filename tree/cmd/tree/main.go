@@ -1,4 +1,4 @@
-// Command tree shows Herdr agents as a tree by supervisor.
+// Command tree shows Herdr workspaces as efforts: their shells, their agents, and the workers each agent dispatched.
 package main
 
 import (
@@ -34,6 +34,11 @@ func main() {
 		snap, err := source.Snapshot(sock)
 		if err != nil {
 			return model.Tree{}, err
+		}
+		// Marks the workers whose result their supervisor took.
+		settled := source.Settled(source.LedgerDir())
+		for i := range snap.Agents {
+			snap.Agents[i].Reported = settled[snap.Agents[i].PaneID]
 		}
 		current.Store(&[2]string{snap.FocusedPane, snap.FocusedTab})
 		return model.Build(snap), nil

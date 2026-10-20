@@ -32,7 +32,8 @@ iso herdr workspace create --cwd "$work/b" --label second --no-focus >/dev/null
 
 out="$(iso env HERDR_SOCKET_PATH="$sock" "$here/bin/tree" --once)"
 echo "$out"
-[ "$out" = " ▸ No agent (2)" ] || { echo "FAIL: expected one 'No agent (2)' line"; exit 1; }
+[ "$(grep -c '^     \$ ' <<<"$out")" = 2 ] || { echo "FAIL: expected one shell row under each of the two workspaces"; exit 1; }
+grep -q '^ ▾ second$' <<<"$out" || { echo "FAIL: expected the effort row of the workspace 'second'"; exit 1; }
 
 if iso "$here/bin/tree" --once >/dev/null 2>&1; then
   echo "FAIL: tree must exit non-zero outside Herdr"; exit 1

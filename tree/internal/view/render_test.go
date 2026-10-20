@@ -10,7 +10,7 @@ import (
 
 func plain() Theme {
 	th := DefaultTheme()
-	th.Plain, th.TabGlyph, th.PaneGlyph, th.WorktreeGlyph = true, "⇥", "›", "⎇"
+	th.Plain, th.ShellGlyph, th.WorktreeGlyph = true, "$", "⎇"
 	return th
 }
 
@@ -23,111 +23,150 @@ func same(t *testing.T, got, want []string) {
 	}
 }
 
-func TestRenderOpenTree(t *testing.T) {
-	review := &model.Node{ID: "r", Label: "review-86", Status: model.Done, Repo: "iam", Shown: model.KindWorkspace}
-	build := &model.Node{ID: "b", Label: "build", Status: model.Idle, Repo: "api", Shown: model.KindTab}
-	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Tag: "ABC-1", Shown: model.KindWorkspace,
-		Children: []*model.Node{review, build}}
-	tree := model.Tree{Roots: []*model.Node{ops}, NoAgent: []*model.Node{{ID: "x", Label: "x"}, {ID: "y", Label: "y"}}}
-	got := Render(Rows(tree, State{}), 40, 1, plain())
-	same(t, got, []string{
-		" ▾ * ops" + sp(27) + "ABC-1",
-		">  ├─ + review-86",
-		">  │" + sp(4) + "iam",
-		"   └─ o build ⇥",
-		sp(8) + "api",
-		"",
-		" ▸ No agent (2)",
+func gke() model.Tree {
+	job := &model.Node{ID: "w2:p1", Label: "SRE-194 job scheduler", Status: model.Idle, Shown: model.KindPane, Worker: true,
+		Repo: "job-scheduler", Worktree: true, Git: model.Git{Repo: "job-scheduler", Branch: "sre-194"}, Tag: "SRE-194",
+		Children: []*model.Node{{ID: "w2:p2", Label: "shepherd", Shown: model.KindShell}}}
+	lead := &model.Node{ID: "w1:p1", Label: "HANDOFF.md resume", Status: model.Idle, Shown: model.KindPane,
+		Children: []*model.Node{job}}
+	e := &model.Node{ID: "w1", Label: "GKE Migration", Shown: model.KindWorkspace, Repo: "flosports",
+		Git: model.Git{Repo: "flosports", Branch: "main"}, Link: "https://linear.app/flosports/project/gke-f425",
+		Children: []*model.Node{{ID: "w1:p2", Label: "Status", Shown: model.KindShell}, lead}}
+	return model.Tree{Roots: []*model.Node{e}}
+}
+
+func TestRenderAnEffort(t *testing.T) {
+	same(t, Render(Rows(gke(), State{}), 44, -1, plain()), []string{
+		" ▾ GKE Migration" + sp(22) + "proj ↗",
+		sp(5) + "flosports@main",
+		sp(5) + "$ Status",
+		sp(5) + "o HANDOFF.md resume",
+		sp(5) + "└ o SRE-194 job scheduler" + sp(7) + "SRE-194",
+		sp(9) + "⎇ job-scheduler@sre-194",
+		sp(9) + "$ shepherd",
 	})
 }
 
-func TestRenderFoldedParentShowsDescendantDots(t *testing.T) {
-	ops := &model.Node{ID: "o", Label: "ops", Status: model.Working, Tag: "ABC-1", Shown: model.KindWorkspace,
-		Children: []*model.Node{
-			{ID: "a", Label: "a", Status: model.Done},
-			{ID: "b", Label: "b", Status: model.Blocked},
-		}}
-	rows := Rows(model.Tree{Roots: []*model.Node{ops}}, State{Folded: map[string]bool{"o": true}})
-	same(t, Render(rows, 40, -1, plain()), []string{" ▸ * ops" + sp(22) + "ABC-1" + sp(2) + "+ !"})
-}
-
-func TestRenderPaneGlyphAndUnknownDot(t *testing.T) {
-	tab := &model.Node{ID: "t", Label: "planning", Status: model.Unknown, Shown: model.KindTab, Children: []*model.Node{
-		{ID: "p", Label: "left", Status: model.Idle, Repo: "ops", Shown: model.KindPane}}}
-	got := Render(Rows(model.Tree{Roots: []*model.Node{tab}}, State{}), 40, -1, plain())
-	same(t, got, []string{
-		" ▾ · planning",
-		"   └─ o left ›",
-		sp(8) + "ops",
-	})
-}
-
-func TestRenderGuideLines(t *testing.T) {
-	n := func(id string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, Children: kids}
+func TestRenderBranchLinesRunPastAWorkerToTheNextOne(t *testing.T) {
+	w := func(id string, kids ...*model.Node) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindPane, Worker: true, Repo: "iam", Children: kids}
 	}
-	tree := model.Tree{Roots: []*model.Node{n("lead", n("a", n("a1"), n("a2")), n("b", n("b1")))}}
-	rows := Rows(tree, State{Folded: map[string]bool{"b": true}})
-	same(t, Render(rows, 40, -1, plain()), []string{
-		" ▾ o lead",
-		"   ├─ o a",
-		"   │  ├─ o a1",
-		"   │  └─ o a2",
-		"   └▸ o b" + sp(2) + "o",
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Working, Shown: model.KindPane, Children: []*model.Node{
+		w("a", &model.Node{ID: "w2:p2", Label: "reviewr", Shown: model.KindShell}),
+		w("b"),
+	}}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain()), []string{
+		" ▾ Main",
+		"     * lead",
+		"     ├ o a",
+		"     │   iam",
+		"     │   $ reviewr",
+		"     └ o b",
+		sp(9) + "iam",
 	})
 }
 
-func TestRenderNarrowAndWide(t *testing.T) {
-	long := &model.Node{ID: "l", Label: "a-very-long-workspace-label-that-does-not-fit", Status: model.Idle, Tag: "ABC-12345",
-		Children: []*model.Node{{ID: "c", Label: "日本語のラベルは幅が広い", Status: model.Done, Repo: "repository"}}}
-	rows := Rows(model.Tree{Roots: []*model.Node{long}}, State{})
-	for _, width := range []int{0, 1, 5, 10, 24, 60} {
-		for _, th := range []Theme{plain(), DefaultTheme()} {
-			for _, line := range Render(rows, width, 0, th) {
-				if w := lipgloss.Width(line); width > 0 && w > width {
-					t.Errorf("width %d plain=%v: line is %d cells: %q", width, th.Plain, w, line)
-				}
+func TestRenderFoldedEffortShowsTheDotsOfItsAgents(t *testing.T) {
+	core := &model.Node{ID: "w3", Label: "Core", Shown: model.KindWorkspace, Tag: "SRE-923",
+		Link: "https://linear.app/flosports/issue/SRE-923",
+		Children: []*model.Node{
+			{ID: "w3:p2", Label: "shepherd", Shown: model.KindShell},
+			{ID: "w3:p1", Label: "lead", Status: model.Done, Shown: model.KindPane, Children: []*model.Node{
+				{ID: "w4:p1", Label: "sweep", Status: model.Working, Shown: model.KindPane, Worker: true}}},
+		}}
+	notes := &model.Node{ID: "w5", Label: "notes", Shown: model.KindWorkspace,
+		Children: []*model.Node{{ID: "w5:p1", Label: "~/notes", Shown: model.KindShell}}}
+	st := State{Folded: map[string]bool{"w3": true, "w5": true}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{core, notes}}, st), 40, -1, plain()), []string{
+		" ▸ Core  + *" + sp(19) + "SRE-923 ↗",
+		"",
+		" ▸ notes  $",
+	})
+}
+
+func TestRenderWorkerTagAndRepoLine(t *testing.T) {
+	review := &model.Node{ID: "w2:p1", Label: "Review infra base services", Status: model.Done, Shown: model.KindPane,
+		Worker: true, Repo: "infra-base-services", Reported: true,
+		Git:  model.Git{Repo: "infra-base-services", Branch: "main", Ahead: 2, Behind: 1},
+		Link: "https://github.com/flocasts/infra-base-services/pull/1079"}
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Idle, Shown: model.KindPane, Children: []*model.Node{review}}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain()), []string{
+		" ▾ Main",
+		"     o lead",
+		"     └ + Review infra base services  #1079",
+		sp(9) + "infra-base-services@main -1 +2  reported",
+	})
+}
+
+func TestRenderNarrowCutsTheTitleAndTheBranchAndKeepsTheTag(t *testing.T) {
+	review := &model.Node{ID: "w2:p1", Label: "Review service level objectives", Status: model.Idle, Shown: model.KindPane,
+		Worker: true, Repo: "iam", Worktree: true,
+		Git:  model.Git{Repo: "iam", Branch: "sre-1006-aws-account-alternate-contacts"},
+		Link: "https://github.com/flocasts/iam/pull/57"}
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Idle, Shown: model.KindPane, Children: []*model.Node{review}}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	got := Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 31, -1, plain())
+	same(t, got[2:], []string{
+		"     └ o Review service l…  #57",
+		sp(9) + "⎇ iam@sre-1006-aws-ac…",
+	})
+}
+
+func TestRenderVeryNarrowPaneStaysInside(t *testing.T) {
+	for _, width := range []int{1, 6, 12} {
+		for _, line := range Render(Rows(gke(), State{}), width, 0, plain()) {
+			if w := lipgloss.Width(line); w > width {
+				t.Errorf("width %d: line %q is %d cells", width, line, w)
 			}
 		}
 	}
-	// A cut label ends in an ellipsis, and the ticket stays on the line.
-	got := Render(rows, 30, -1, plain())
-	if !strings.Contains(got[0], "…") || !strings.HasSuffix(got[0], "ABC-12345") {
-		t.Errorf("root line = %q", got[0])
-	}
-	if !strings.Contains(got[1], "…") || strings.TrimSpace(got[2]) != "repository" {
-		t.Errorf("child lines = %q, %q", got[1], got[2])
-	}
 }
 
-func TestRenderRepoBelowTheNameOnlyWhereItChanges(t *testing.T) {
-	n := func(id, repo string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: repo, Shown: model.KindWorkspace, Children: kids}
-	}
-	tree := model.Tree{Roots: []*model.Node{
-		n("main", "flo", n("same", "flo"), n("mid", "iam", n("leaf", "iam"), n("other", "ops"))),
-	}}
-	same(t, Render(Rows(tree, State{}), 40, -1, plain()), []string{
-		" ▾ o main",
-		"   │ flo",
-		"   ├─ o same",
-		"   └─ o mid",
-		"      │ iam",
-		"      ├─ o leaf",
-		"      └─ o other",
-		sp(11) + "ops",
+func TestRenderCursorHeldPromptsAndStall(t *testing.T) {
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Working, Stalled: true, Pending: 2, Shown: model.KindPane}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, 1, plain()), []string{
+		" ▾ Main",
+		">    ~ lead +2",
 	})
 }
 
-func TestRenderMarksARowThatWorksInALinkedWorktree(t *testing.T) {
-	worker := &model.Node{ID: "w", Label: "worker", Status: model.Idle, Shown: model.KindTab, Worktree: true}
-	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Worktree: true,
-		Children: []*model.Node{worker, {ID: "m", Label: "main", Status: model.Idle, Shown: model.KindWorkspace}}}
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 40, -1, plain()), []string{
-		" ▾ o lead ⎇",
-		"   ├─ o worker ⇥ ⎇",
-		"   └─ o main",
-	})
+func TestRenderAStalledDotOnlyForAWorkingAgent(t *testing.T) {
+	done := &model.Node{ID: "w1:p1", Label: "done", Status: model.Done, Stalled: true, Shown: model.KindPane}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{done}}
+	got := Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain())
+	same(t, got[1:], []string{"     + done"})
+}
+
+func TestEffortAndWorkerTags(t *testing.T) {
+	for _, c := range []struct {
+		n    model.Node
+		want string
+	}{
+		{model.Node{Link: "https://linear.app/flosports/project/gke-f425", Tag: "SRE-1"}, "proj ↗"},
+		{model.Node{Tag: "SRE-923", Link: "https://linear.app/flosports/issue/SRE-923"}, "SRE-923 ↗"},
+		{model.Node{Tag: "SRE-923"}, "SRE-923"},
+		{model.Node{Link: "https://example.com/x"}, "↗"},
+		{model.Node{}, ""},
+	} {
+		if got := effortTag(&c.n); got != c.want {
+			t.Errorf("effortTag(%+v) = %q, want %q", c.n, got, c.want)
+		}
+	}
+	for _, c := range []struct {
+		n    model.Node
+		want string
+	}{
+		{model.Node{Tag: "SRE-194", Link: "https://github.com/flocasts/iam/pull/5"}, "SRE-194"},
+		{model.Node{Link: "https://github.com/flocasts/iam/pull/5"}, "#5"},
+		{model.Node{Link: "https://linear.app/flosports/issue/SRE-1"}, ""},
+	} {
+		if got := workerTag(&c.n); got != c.want {
+			t.Errorf("workerTag(%+v) = %q, want %q", c.n, got, c.want)
+		}
+	}
 }
 
 func TestCutLeftKeepsTheEnd(t *testing.T) {
@@ -139,99 +178,4 @@ func TestCutLeftKeepsTheEnd(t *testing.T) {
 			t.Errorf("cutLeft(%d) = %q, want %q", c.n, got, c.want)
 		}
 	}
-}
-
-func TestRenderTagIsAtTheRightEdgeOfAnyRow(t *testing.T) {
-	worker := &model.Node{ID: "w", Label: "a-worker-with-a-long-name", Status: model.Idle, Shown: model.KindWorkspace, Tag: "SRE-923"}
-	long := &model.Node{ID: "x", Label: "x", Status: model.Idle, Shown: model.KindWorkspace, Tag: "a-tag-that-is-too-long"}
-	lead := &model.Node{ID: "l", Label: "lead", Status: model.Idle, Shown: model.KindWorkspace, Tag: "mine",
-		Children: []*model.Node{worker, long}}
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 30, -1, plain()), []string{
-		" ▾ o lead" + sp(17) + "mine",
-		"   ├─ o a-worker-wit…" + sp(2) + "SRE-923",
-		"   └─ o x" + sp(9) + "a-tag-that-…",
-	})
-}
-
-func TestRenderLeavesABlankLineAboveEachRootAndAboveTheGroups(t *testing.T) {
-	n := func(id string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, Children: kids}
-	}
-	tree := model.Tree{
-		Roots:   []*model.Node{n("one", n("a")), n("two"), n("three")},
-		NoAgent: []*model.Node{n("x")},
-		Hidden:  []*model.Node{n("y")},
-	}
-	same(t, Render(Rows(tree, State{}), 40, 1, plain()), []string{
-		" ▾ o one",
-		">  └─ o a",
-		"",
-		"   o two",
-		"",
-		"   o three",
-		"",
-		" ▸ No agent (1)",
-		" ▸ Hidden (1)",
-	})
-}
-
-func TestRenderNoRows(t *testing.T) {
-	if got := Render(nil, 40, 0, plain()); len(got) != 0 {
-		t.Fatalf("no rows, got %q", got)
-	}
-}
-
-func TestRenderShowsHeldPromptsAndAStalledAgent(t *testing.T) {
-	waiting := &model.Node{ID: "w", Label: "worker", Status: model.Idle, Shown: model.KindWorkspace, Pending: 2, Tag: "SRE-1"}
-	stuck := &model.Node{ID: "s", Label: "stuck", Status: model.Working, Shown: model.KindWorkspace, Stalled: true}
-	lead := &model.Node{ID: "l", Label: "lead", Status: model.Working, Shown: model.KindWorkspace, Pending: 1,
-		Children: []*model.Node{waiting, stuck}}
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{lead}}, State{}), 30, -1, plain()), []string{
-		" ▾ * lead +1",
-		"   ├─ o worker +2" + sp(8) + "SRE-1",
-		"   └─ ~ stuck",
-	})
-}
-
-func TestRenderAStalledDotOnlyForAWorkingAgent(t *testing.T) {
-	// Herdr clears the stall when the state changes; a row that is not working never shows it.
-	done := &model.Node{ID: "d", Label: "done", Status: model.Done, Shown: model.KindWorkspace, Stalled: true}
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{done}}, State{}), 30, -1, plain()), []string{
-		"   + done",
-	})
-}
-
-func TestRenderRepoLineSaysTheBranchOrMarksALinkedWorktree(t *testing.T) {
-	wt := func(id, where string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: "iam", Shown: model.KindWorkspace,
-			Worktree: true, Where: where, Children: kids}
-	}
-	pane := wt("p", "iam/_worktrees/b")
-	pane.Shown = model.KindPane
-	ops := &model.Node{ID: "o", Label: "ops", Status: model.Idle, Repo: "flosports", Shown: model.KindWorkspace,
-		Where: "~/flosports", Git: model.Git{Repo: "flosports", Branch: "main", Ahead: 1, Behind: 2},
-		Children: []*model.Node{
-			wt("a", "iam/_worktrees/a"),
-			wt("b", "iam/_worktrees/b", pane),
-			{ID: "c", Label: "c", Status: model.Idle, Repo: "iam", Shown: model.KindWorkspace, Where: "~/iam",
-				Git: model.Git{Repo: "iam", Branch: "feat"}},
-		}}
-	same(t, Render(Rows(model.Tree{Roots: []*model.Node{ops}}, State{}), 40, -1, plain()), []string{
-		" ▾ o ops",
-		"   │ flosports@main -2 +1",
-		"   ├─ o a",
-		"   │" + sp(4) + "iam ⎇",
-		"   ├─ o b",
-		"   │  │ iam ⎇",
-		"   │  └─ o p ›",
-		"   └─ o c",
-		sp(8) + "iam@feat",
-	})
-}
-
-func TestRenderRepoLineCutsTheRepoBeforeTheBranch(t *testing.T) {
-	n := &model.Node{ID: "n", Label: "n", Status: model.Idle, Repo: "infra-base-services", Shown: model.KindWorkspace,
-		Git: model.Git{Repo: "infra-base-services", Branch: "main", Ahead: 3}}
-	got := Render(Rows(model.Tree{Roots: []*model.Node{n}}, State{}), 20, -1, plain())
-	same(t, got, []string{"   o n", sp(5) + "infra-…@main +3"})
 }

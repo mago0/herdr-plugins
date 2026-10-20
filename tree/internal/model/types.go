@@ -114,8 +114,8 @@ type Node struct {
 	Blocker string
 	// Answers are the choices of the dialog a blocked agent shows, when one key picks each.
 	// Dialog names that dialog, so that Herdr can refuse an answer for a dialog that is gone.
-	Answers  []Answer
-	Dialog   string
+	Answers []Answer
+	Dialog  string
 	// Worker is true for an agent that an agent in another workspace supervises.
 	Worker bool
 	// Reported is true for a worker whose result its supervisor took and that is not working again.

@@ -77,7 +77,7 @@ type Program struct {
 	rows   []Row
 	sel    string
 	cursor int
-	// offset is the first line in view. A row with a repo takes two lines.
+	// offset is the first line in view. An effort or a worker with a repo takes two lines.
 	offset int
 	// hover is the row under the pointer, and still counts the ticks since the pointer moved.
 	hover string
@@ -212,19 +212,11 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return p.step(-1)
 		case " ":
 			p.toggle()
-		case "a":
-			p.state.Attention = !p.state.Attention
-			p.rebuild()
 		case "enter":
 			if len(p.rows) == 0 {
 				break
 			}
-			n := p.rows[p.cursor].Node
-			if n.Shown == model.KindGroup {
-				p.toggle()
-				break
-			}
-			return p, p.jump(n)
+			return p, p.jump(p.rows[p.cursor].Node)
 		}
 	}
 	return p, nil
@@ -257,13 +249,13 @@ func (p Program) step(by int) (tea.Model, tea.Cmd) {
 	}
 }
 
-// advance puts the cursor on the next row in the direction of by that can take the focus, past
-// the ends of the tree, and jumps to it. Group rows cannot take the focus.
+// advance puts the cursor on the next agent or worker row in the direction of by, past the ends of
+// the view, and jumps to it. Effort and shell rows do not take a step.
 func (p Program) advance(by int) (tea.Model, tea.Cmd) {
 	for i := 1; i <= len(p.rows); i++ {
 		at := ((p.cursor+by*i)%len(p.rows) + len(p.rows)) % len(p.rows)
 		n := p.rows[at].Node
-		if n.Shown == model.KindGroup {
+		if n.Shown != model.KindPane {
 			continue
 		}
 		p.cursor, p.free, p.hover = at, false, ""
@@ -324,8 +316,7 @@ func (p Program) shown() error {
 	return p.failed
 }
 
-// siblings returns the rows that hang from the same row as row i, from the top. Group rows
-// are not among them.
+// siblings returns the rows at the depth of row i in the same run, from the top.
 func (p Program) siblings(i int) []int {
 	depth := p.rows[i].Depth
 	first := i
@@ -334,7 +325,7 @@ func (p Program) siblings(i int) []int {
 	}
 	var out []int
 	for j := first; j < len(p.rows) && p.rows[j].Depth >= depth; j++ {
-		if p.rows[j].Depth == depth && p.rows[j].Node.Shown != model.KindGroup {
+		if p.rows[j].Depth == depth {
 			out = append(out, j)
 		}
 	}
@@ -360,10 +351,9 @@ func (p Program) reorder(workspace, before string) tea.Cmd {
 	return func() tea.Msg { return movedMsg{err: move(workspace, before)} }
 }
 
-// shift moves the cursor row one place down or up among its siblings. Rows of one workspace
-// move as one, because the order is that of the workspaces in Herdr.
+// shift moves the effort under the cursor one place down or up, by its workspace in Herdr.
 func (p Program) shift(by int) tea.Cmd {
-	if len(p.rows) == 0 || p.rows[p.cursor].Node.Shown == model.KindGroup {
+	if len(p.rows) == 0 || p.rows[p.cursor].Depth != 0 {
 		return nil
 	}
 	own := p.rows[p.cursor].Node.WorkspaceID
@@ -387,10 +377,12 @@ func (p Program) shift(by int) tea.Cmd {
 	return nil
 }
 
-// drop moves row from to the place of row to. A row dropped on a row below it goes below that
-// row. A drop on a row deeper in the tree is a drop on the sibling that holds it, and a drop on
-// a row that is no sibling does nothing.
+// drop moves the effort of row from to the place of the effort that holds row to. An effort
+// dropped below goes below that effort. Pane rows do not move.
 func (p Program) drop(from, to int) tea.Cmd {
+	if p.rows[from].Depth != 0 {
+		return nil
+	}
 	depth := p.rows[from].Depth
 	for to > 0 && p.rows[to].Depth > depth {
 		to--
@@ -449,10 +441,9 @@ func (p Program) where() string {
 	return " " + p.theme.paint(cutLeft(n.Where, p.width-1), faint)
 }
 
-// mouse handles a click on a row, a drag of a row, and the wheel. Ctrl with a click opens the
-// link of a row. A press on the part before
-// the state dot folds a row that has children. A press elsewhere on a row jumps to it when the
-// button comes up on that row, and moves the row when it comes up on another one.
+// mouse handles a click on a row, a drag of an effort, and the wheel. Ctrl with a click opens the
+// link of a row. A press on the fold mark folds an effort. A press elsewhere jumps to the row when
+// the button comes up on it, and moves an effort when it comes up on another one.
 func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.Action == tea.MouseActionMotion {
 		p.hover, p.still = "", 0
@@ -503,7 +494,7 @@ func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 		p.free = false
 		p.settle()
 		r := p.rows[i]
-		if r.Node.Shown == model.KindGroup || (r.HasChildren && m.X < 1+lipgloss.Width(lead(r))) {
+		if r.HasChildren && m.X < 1+lipgloss.Width(lead(r)) {
 			p.toggle()
 			break
 		}
@@ -545,10 +536,10 @@ const answerMenuRequest = "herdr-menu2"
 
 // menuTitle is the request for the menu of a row. Its last two parts are the pane of the row's
 // agent and the label that pane has, which Herdr needs to set a label. The pane is empty for a
-// row that holds several agents.
+// row that is not an agent.
 func menuTitle(n *model.Node, count int) string {
 	pane := ""
-	if n.Focus == model.KindPane {
+	if n.Shown == model.KindPane {
 		pane = n.ID
 	}
 	if pane != "" && n.Dialog != "" && len(n.Answers) > 0 {
@@ -606,13 +597,15 @@ func answerMenuTitle(n *model.Node, pane string) (string, bool) {
 	return "", false
 }
 
-// menuTarget names what a row stands for on screen, as "<kind>;<id>". A group row has no menu.
+// menuTarget names what a row stands for on screen, as "<kind>;<id>".
 func menuTarget(n *model.Node) string {
 	switch n.Shown {
 	case model.KindWorkspace:
 		return "workspace;" + n.WorkspaceID
 	case model.KindTab:
 		return "tab;" + n.TabID
+	case model.KindShell:
+		return "pane;" + n.ID
 	case model.KindPane:
 		return "pane;" + n.ID
 	}
@@ -723,20 +716,17 @@ func (p Program) View() string {
 		return p.sidebarView()
 	}
 	var b strings.Builder
-	title := " Agents by supervisor"
-	if p.state.Attention {
-		title += "  (attention)"
-	}
+	title := " Efforts"
 	b.WriteString(p.theme.paint(title, bold) + "\n\n")
 	if len(p.rows) == 0 {
-		b.WriteString("   no agents\n")
+		b.WriteString("   no workspaces\n")
 	}
 	lines := Render(p.rows, p.width, p.cursor, p.theme)
 	body := max(1, p.height-popupChrome)
 	for _, line := range lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)] {
 		b.WriteString(line + "\n")
 	}
-	foot := " ↑↓ move  ⇧↑↓ reorder  ⏎ jump  ␣ fold  a attention  q close"
+	foot := " ↑↓ move  ⇧↑↓ reorder  ⏎ jump  ␣ fold  q close"
 	if err := p.shown(); err != nil {
 		foot = " error: " + err.Error()
 	}
@@ -747,15 +737,12 @@ func (p Program) View() string {
 // sidebarView is the rows alone. Herdr draws the section title, and the keys are not shown.
 func (p Program) sidebarView() string {
 	if len(p.rows) == 0 && p.err == nil {
-		return p.theme.paint(" no agents", faint)
+		return p.theme.paint(" no workspaces", faint)
 	}
 	_, chrome := p.chrome()
 	body := max(1, p.height-chrome)
 	lines := Render(p.rows, p.width, p.cursor, p.theme)
 	lines = lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)]
-	if p.state.Attention && len(lines) == 0 {
-		lines = append(lines, p.theme.paint(" no agent needs attention (a: show all)", faint))
-	}
 	for len(lines) < body {
 		lines = append(lines, "")
 	}

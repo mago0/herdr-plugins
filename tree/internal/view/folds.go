@@ -22,19 +22,12 @@ func LoadFolds(dir string) map[string]bool {
 	return folds
 }
 
-// SaveFolds writes the folds of the rows that are still in the tree.
+// SaveFolds writes the folds of the efforts that are still there.
 func SaveFolds(dir string, folds map[string]bool, t model.Tree) error {
-	keep := map[string]bool{GroupNoAgent: true, GroupHidden: true}
-	var mark func(nodes []*model.Node)
-	mark = func(nodes []*model.Node) {
-		for _, n := range nodes {
-			keep[n.ID] = true
-			mark(n.Children)
-		}
+	keep := map[string]bool{}
+	for _, n := range t.Roots {
+		keep[n.ID] = true
 	}
-	mark(t.Roots)
-	mark(t.NoAgent)
-	mark(t.Hidden)
 	out := map[string]bool{}
 	for id, v := range folds {
 		if keep[id] {

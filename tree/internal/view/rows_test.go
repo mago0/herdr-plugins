@@ -8,21 +8,30 @@ import (
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
 
-func node(id, status string, kids ...*model.Node) *model.Node {
-	return &model.Node{ID: id, Label: id, Status: status, Shown: model.KindWorkspace, Children: kids}
+func effort(id string, kids ...*model.Node) *model.Node {
+	return &model.Node{ID: id, Label: id, Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w-" + id, Children: kids}
+}
+
+func agent(id, status string, kids ...*model.Node) *model.Node {
+	return &model.Node{ID: id, Label: id, Status: status, Focus: model.KindPane, Shown: model.KindPane, TabID: id + ":t", Children: kids}
+}
+
+func worker(id, status string, kids ...*model.Node) *model.Node {
+	n := agent(id, status, kids...)
+	n.Worker = true
+	return n
+}
+
+func shell(id string) *model.Node {
+	return &model.Node{ID: id, Label: id, Status: model.Unknown, Focus: model.KindPane, Shown: model.KindShell}
 }
 
 func sample() model.Tree {
-	return model.Tree{
-		Roots: []*model.Node{
-			node("lead", model.Working,
-				node("a", model.Done),
-				node("b", model.Idle, node("b1", model.Blocked))),
-			node("solo", model.Idle),
-		},
-		NoAgent: []*model.Node{node("repo1", model.Unknown), node("repo2", model.Unknown)},
-		Hidden:  []*model.Node{node("watch", model.Working)},
-	}
+	return model.Tree{Roots: []*model.Node{
+		effort("lead", agent("a", model.Done), agent("b", model.Idle, worker("b1", model.Blocked))),
+		effort("solo"),
+		effort("repo1", shell("sh1")),
+	}}
 }
 
 func show(rows []Row) string {
@@ -51,74 +60,69 @@ func TestRowsDefault(t *testing.T) {
    b []
      b1 []
  solo []
-+No agent (2) []
-+Hidden (1) []
+ repo1 []
+   sh1 []
 `)
 }
 
 func TestRowsFoldAndRollup(t *testing.T) {
-	st := State{Folded: map[string]bool{"lead": true, GroupHidden: false}}
+	st := State{Folded: map[string]bool{"lead": true, "repo1": true}}
 	expect(t, Rows(sample(), st), `
 +lead [done idle blocked]
  solo []
-+No agent (2) []
- Hidden (1) []
-   watch []
++repo1 [shell]
 `)
 }
 
-func TestRowsAttention(t *testing.T) {
-	expect(t, Rows(sample(), State{Attention: true}), `
- lead []
-   a []
-   b []
-     b1 []
+func TestRowsALeafEffortDoesNotFold(t *testing.T) {
+	expect(t, Rows(model.Tree{Roots: []*model.Node{effort("solo")}}, State{Folded: map[string]bool{"solo": true}}), `
+ solo []
 `)
-	quiet := model.Tree{Roots: []*model.Node{node("solo", model.Idle)}, Hidden: []*model.Node{node("w", model.Done)}}
-	if rows := Rows(quiet, State{Attention: true}); len(rows) != 0 {
-		t.Fatalf("nothing needs attention, got %s", show(rows))
-	}
 }
 
-func TestRowsGuides(t *testing.T) {
-	deep := model.Tree{Roots: []*model.Node{
-		node("lead", model.Idle,
-			node("a", model.Idle, node("a1", model.Idle)),
-			node("b", model.Idle, node("b1", model.Idle))),
+func TestRowsBranchLinesOfWorkers(t *testing.T) {
+	tree := model.Tree{Roots: []*model.Node{
+		effort("e", agent("L", model.Idle,
+			worker("w1", model.Idle, shell("s1"), worker("w1a", model.Idle)),
+			worker("w2", model.Idle))),
 	}}
 	got := map[string]Row{}
-	for _, r := range Rows(deep, State{}) {
+	for _, r := range Rows(tree, State{}) {
 		got[r.Node.ID] = r
 	}
-	cases := []struct {
+	for _, c := range []struct {
 		id    string
+		depth int
 		last  bool
 		trunk []bool
 	}{
-		{"a", false, nil},
-		{"b", true, nil},
-		{"a1", true, []bool{true}},  // a has a later sibling: its guide line runs past a1
-		{"b1", true, []bool{false}}, // b is the last child: nothing runs past b1
-	}
-	for _, c := range cases {
+		{"L", 1, false, nil},
+		{"w1", 2, false, nil},
+		{"s1", 3, false, []bool{true}},
+		{"w1a", 3, true, []bool{true}},
+		{"w2", 2, true, nil},
+	} {
 		r := got[c.id]
-		if r.Last != c.last || fmt.Sprint(r.Trunk) != fmt.Sprint(c.trunk) {
-			t.Errorf("%s: last=%v trunk=%v, want last=%v trunk=%v", c.id, r.Last, r.Trunk, c.last, c.trunk)
-		}
-	}
-	// With the filter on, the last kept child is the last one.
-	deep.Roots[0].Children[0].Children[0].Status = model.Blocked
-	for _, r := range Rows(deep, State{Attention: true}) {
-		if r.Node.ID == "a" && !r.Last {
-			t.Errorf("a is the only kept child of lead and must be last")
+		if r.Depth != c.depth || r.Last != c.last || fmt.Sprint(r.Trunk) != fmt.Sprint(c.trunk) {
+			t.Errorf("%s: depth=%d last=%v trunk=%v, want depth=%d last=%v trunk=%v",
+				c.id, r.Depth, r.Last, r.Trunk, c.depth, c.last, c.trunk)
 		}
 	}
 }
 
-func TestRowsEmptyGroupsAndLeafFold(t *testing.T) {
-	only := model.Tree{Roots: []*model.Node{node("solo", model.Idle)}}
-	// A stored fold on a node with no children must not mark it folded.
-	expect(t, Rows(only, State{Folded: map[string]bool{"solo": true}}), `
- solo []
-`)
+func TestRowsRepoLineOnlyUnderEffortsAndWorkers(t *testing.T) {
+	a := agent("a", model.Idle, worker("w", model.Idle))
+	a.Repo, a.Children[0].Repo = "ops", "iam"
+	x := effort("x", a)
+	x.Repo = "flosports"
+	tree := model.Tree{Roots: []*model.Node{x, effort("y")}}
+	for _, r := range Rows(tree, State{}) {
+		want := map[string]string{"x": "flosports", "a": "", "w": "iam", "y": ""}[r.Node.ID]
+		if r.Repo != want {
+			t.Errorf("%s: repo %q, want %q", r.Node.ID, r.Repo, want)
+		}
+		if gap := r.Node.ID == "y"; r.Gap != gap {
+			t.Errorf("%s: gap %v, want %v", r.Node.ID, r.Gap, gap)
+		}
+	}
 }

@@ -8,15 +8,16 @@ import (
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
 
-// minLabel is the least count of cells a label or repo keeps in a narrow pane.
+// minLabel is the least count of cells a label, repo or branch keeps in a narrow pane.
 const minLabel = 4
 
-// maxTag is the most cells a tag takes at the right edge.
+// maxTag is the most cells a label takes at the right edge.
 const maxTag = 12
 
 var (
-	bold  = lipgloss.NewStyle().Bold(true)
-	faint = lipgloss.NewStyle().Faint(true)
+	bold      = lipgloss.NewStyle().Bold(true)
+	faint     = lipgloss.NewStyle().Faint(true)
+	plainText = lipgloss.NewStyle()
 )
 
 // cut shortens s to n cells, ending in an ellipsis when it was cut.
@@ -49,8 +50,8 @@ func cutLeft(s string, n int) string {
 	return "…" + string(r)
 }
 
-// Render draws the rows: one line for a row, and a second line for its repo where Row.Repo is set.
-// selected is the index of the row under the cursor, or -1.
+// Render draws the rows: one line for each row, and a second line under an effort or a worker
+// that has a repo. selected is the index of the row under the cursor, or -1.
 func Render(rows []Row, width, selected int, th Theme) []string {
 	var lines []string
 	add := func(line string) {
@@ -65,39 +66,6 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		if r.Gap {
 			lines = append(lines, "")
 		}
-		dot := n.Shown != model.KindGroup
-		glyph, right := "", ""
-		if dot && n.Tag != "" {
-			right = cut(n.Tag, maxTag)
-		}
-		if dot && r.Depth > 0 {
-			switch n.Shown {
-			case model.KindTab:
-				glyph = " " + th.TabGlyph
-			case model.KindPane:
-				glyph = " " + th.PaneGlyph
-			}
-		}
-		// The repo line carries the mark of a linked worktree. A row with no repo keeps it here.
-		if dot && n.Worktree && n.Repo == "" {
-			glyph += " " + th.WorktreeGlyph
-		}
-		if dot && n.Pending > 0 {
-			glyph += " " + th.pending(n.Pending)
-		}
-		tail := 0
-		if right != "" {
-			tail += 2 + lipgloss.Width(right)
-		}
-		if len(r.Rollup) > 0 {
-			tail += 1 + 2*len(r.Rollup)
-		}
-		ld := lead(r)
-		label := n.Label
-		if width > 0 {
-			label = cut(label, max(minLabel, width-1-lipgloss.Width(ld)-dotCells(dot)-lipgloss.Width(glyph)-tail))
-		}
-
 		mark := " "
 		switch {
 		case i != selected:
@@ -106,37 +74,53 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		default:
 			mark = bold.Render("▌")
 		}
-		var b strings.Builder
-		b.WriteString(mark + th.paint(ld, faint))
-		if dot {
-			b.WriteString(th.dot(state(n)) + " ")
-		}
-		if r.Depth == 0 && dot {
-			b.WriteString(th.paint(label, bold))
-		} else {
-			b.WriteString(label)
-		}
-		b.WriteString(th.paint(glyph, faint))
-		if right != "" {
-			// The text ends at the right edge of the pane, before the dots of a folded row.
-			used := 1 + lipgloss.Width(ld) + dotCells(dot) + lipgloss.Width(label) + lipgloss.Width(glyph)
-			b.WriteString(strings.Repeat(" ", max(2, width-used-tail+2)) + th.paint(right, tagStyle(n)))
-		}
-		if len(r.Rollup) > 0 {
-			dots := make([]string, len(r.Rollup))
-			for j, s := range r.Rollup {
-				dots[j] = th.dot(s)
+		head, after, right, style := mark+th.paint(lead(r), faint), "", "", plainText
+		switch {
+		case r.Depth == 0:
+			style, right = bold, effortTag(n)
+			if r.Folded {
+				after = "  " + rollup(r.Rollup, th)
 			}
-			b.WriteString("  " + strings.Join(dots, " "))
+		case n.Shown == model.KindShell:
+			head += th.paint(th.ShellGlyph+" ", faint)
+			style = faint
+		default:
+			head += th.dot(state(n)) + " "
+			if n.Pending > 0 {
+				after = " " + th.paint(th.pending(n.Pending), faint)
+			}
+			if n.Worker {
+				right = workerTag(n)
+			}
 		}
-		add(b.String())
+		used := lipgloss.Width(head) + lipgloss.Width(after)
+		tail := 0
+		if right != "" {
+			tail = 2 + lipgloss.Width(right)
+		}
+		label := n.Label
+		if width > 0 {
+			label = cut(label, max(minLabel, width-used-tail))
+		}
+		line := head + th.paint(label, style) + after
+		if right != "" {
+			pad := 2
+			if width > 0 {
+				pad = max(2, width-used-lipgloss.Width(label)-lipgloss.Width(right))
+			}
+			line += strings.Repeat(" ", pad) + th.paint(right, tagStyle(n))
+		}
+		add(line)
 		if r.Repo != "" {
-			under := below(r)
+			under, note := below(r), ""
+			if n.Worker && n.Reported {
+				note = "  reported"
+			}
 			room := 0
 			if width > 0 {
-				room = max(1, width-1-lipgloss.Width(under))
+				room = max(1, width-1-lipgloss.Width(under)-lipgloss.Width(note))
 			}
-			add(mark + th.paint(under, faint) + repoLine(n, room, th))
+			add(mark + th.paint(under, faint) + repoLine(n, room, th) + th.paint(note, faint))
 		}
 	}
 	return lines
@@ -150,15 +134,54 @@ func state(n *model.Node) string {
 	return n.Status
 }
 
-// repoLine is the text under a row: the repo with its branch and its distance from the upstream,
-// or the repo with the worktree glyph for a linked worktree. room is the cells it can take, or 0
-// for no limit; the repo is cut before the branch, and the text after them is kept whole.
-func repoLine(n *model.Node, room int, th Theme) string {
-	name, branch, tail := n.Repo, n.Git.Branch, ""
+// rollup is the dots of a folded effort's agents and workers, or the shell glyph for an effort
+// that holds only shells.
+func rollup(states []string, th Theme) string {
+	out := make([]string, len(states))
+	for i, s := range states {
+		if s == RollupShell {
+			out[i] = th.paint(th.ShellGlyph, faint)
+		} else {
+			out[i] = th.dot(s)
+		}
+	}
+	return strings.Join(out, " ")
+}
+
+// effortTag is the right edge of an effort: "proj ↗" for a Linear project, else its label, with
+// ↗ when it has a link to open.
+func effortTag(n *model.Node) string {
 	switch {
-	case n.Worktree:
-		branch, tail = "", " "+th.WorktreeGlyph
-	case branch != "":
+	case model.IsProject(n.Link):
+		return "proj ↗"
+	case n.Tag != "" && n.Link != "":
+		return cut(n.Tag, maxTag) + " ↗"
+	case n.Tag != "":
+		return cut(n.Tag, maxTag)
+	case n.Link != "":
+		return "↗"
+	}
+	return ""
+}
+
+// workerTag is the right edge of a worker: its label, else the number of the pull request it links.
+func workerTag(n *model.Node) string {
+	if n.Tag != "" {
+		return cut(n.Tag, maxTag)
+	}
+	return model.PRNumber(n.Link)
+}
+
+// repoLine is the second line of a row: the worktree glyph for a linked worktree, the repo with its
+// branch, and the distance of the branch from its base. room is the cells it can take, or 0 for no
+// limit; the branch is cut before the repo, and the counts are kept whole.
+func repoLine(n *model.Node, room int, th Theme) string {
+	glyph := ""
+	if n.Worktree {
+		glyph = th.WorktreeGlyph + " "
+	}
+	name, branch, tail := n.Repo, n.Git.Branch, ""
+	if branch != "" {
 		if n.Git.Behind > 0 {
 			tail += fmt.Sprintf(" -%d", n.Git.Behind)
 		}
@@ -167,84 +190,73 @@ func repoLine(n *model.Node, room int, th Theme) string {
 		}
 	}
 	if room > 0 {
-		room -= lipgloss.Width(tail)
+		room -= lipgloss.Width(glyph) + lipgloss.Width(tail)
 		if branch == "" {
 			name = cut(name, max(minLabel, room))
 		} else {
-			name = cut(name, max(minLabel, room-1-lipgloss.Width(branch)))
+			name = cut(name, max(minLabel, room-1-minLabel))
 			branch = cut(branch, max(minLabel, room-1-lipgloss.Width(name)))
 		}
 	}
 	if branch != "" {
 		name += "@" + branch
 	}
-	return th.repo(name) + th.paint(tail, faint)
+	return th.paint(glyph, faint) + th.repo(name) + th.paint(tail, faint)
 }
 
-// below is the part of a repo line before the repo: the guide lines that run past the row, and
-// the line down to its children when they are in view. The repo starts under the label.
-func below(r Row) string {
+// guides is the lines of the workers above a row that run on past it.
+func guides(trunk []bool) string {
 	var b strings.Builder
-	b.WriteString("  ")
-	if r.Depth > 0 {
-		for _, runs := range append(append([]bool(nil), r.Trunk...), !r.Last) {
-			if runs {
-				b.WriteString("│  ")
-			} else {
-				b.WriteString("   ")
+	for _, runs := range trunk {
+		if runs {
+			b.WriteString("│ ")
+		} else {
+			b.WriteString("  ")
+		}
+	}
+	return b.String()
+}
+
+// lead is what comes before the dot or glyph of a row: the fold mark of an effort, the indent of
+// its panes, and the branch line of a worker, which starts under the dot of the agent above it.
+func lead(r Row) string {
+	switch r.Depth {
+	case 0:
+		mark := " "
+		if r.HasChildren {
+			mark = "▾"
+			if r.Folded {
+				mark = "▸"
 			}
 		}
-	}
-	if r.HasChildren && !r.Folded {
-		return b.String() + "│ "
-	}
-	return b.String() + "  "
-}
-
-// lead is the fold mark of a root, or the guide lines and branch of a row below one.
-func lead(r Row) string {
-	mark := ""
-	if r.HasChildren {
-		mark = "▾"
-		if r.Folded {
-			mark = "▸"
-		}
-	}
-	if r.Depth == 0 {
-		if mark == "" {
-			mark = " "
-		}
 		return mark + " "
+	case 1:
+		return "    "
 	}
-	var b strings.Builder
-	b.WriteString("  ")
-	for _, runs := range r.Trunk {
-		if runs {
-			b.WriteString("│  ")
-		} else {
-			b.WriteString("   ")
-		}
+	b := "    " + guides(r.Trunk)
+	switch {
+	case r.Node.Shown != model.KindPane:
+		return b + "  "
+	case r.Last:
+		return b + "└ "
 	}
+	return b + "├ "
+}
+
+// below is what comes before the second line of a row: the indent of an effort's panes, or the
+// branch line of a worker running on to the next worker.
+func below(r Row) string {
+	if r.Depth == 0 {
+		return "    "
+	}
+	b := "    " + guides(r.Trunk)
 	if r.Last {
-		b.WriteString("└")
-	} else {
-		b.WriteString("├")
+		return b + "    "
 	}
-	// Below a root only a folded row is marked: an open parent has its children in view.
-	if r.Folded {
-		return b.String() + "▸ "
-	}
-	return b.String() + "─ "
+	return b + "│   "
 }
 
-func dotCells(dot bool) int {
-	if dot {
-		return 2
-	}
-	return 0
-}
-
-// tagStyle is the look of a row's tag: underlined when the row has a link to open.
+// tagStyle is the look of a row's right edge: underlined when the row has a link to open.
 func tagStyle(n *model.Node) lipgloss.Style {
 	if n.Link != "" {
 		return faint.Underline(true)

@@ -1,27 +1,24 @@
-// Package view turns the tree into rows, draws them, and runs the interactive pane.
+// Package view turns the efforts into rows, draws them, and runs the interactive pane.
 package view
 
-import (
-	"fmt"
+import "github.com/mago0/herdr-plugins/tree/internal/model"
 
-	"github.com/mago0/herdr-plugins/tree/internal/model"
-)
-
-// Row is one visible line of the tree.
+// Row is one visible row: one line, and a second line under an effort or a worker with a repo.
 type Row struct {
-	Node        *model.Node
-	Depth       int
+	Node  *model.Node
+	Depth int
+	// HasChildren and Folded are those of an effort. Only an effort folds.
 	HasChildren bool
 	Folded      bool
-	// Last and Trunk place the guide lines: the branch to this row and the lines that run past it.
-	Last   bool
-	Trunk  []bool
+	// Last and Trunk place the branch lines of workers: Last is true for the last worker under the
+	// same row, and Trunk says for each worker above this row whether its line runs on past it.
+	Last  bool
+	Trunk []bool
+	// Rollup is the dot states of the agents and workers of a folded effort.
 	Rollup []string
-	// Repo is the repository shown on a second line: set where the row's checkout is not that of
-	// the row it hangs from.
+	// Repo is the repository on the second line of an effort or a worker, or "".
 	Repo string
-	// Gap is true for a row with a blank line above it: each root after the first, and the
-	// first of the groups.
+	// Gap is true for each effort after the first, which has a blank line above it.
 	Gap bool
 }
 
@@ -37,112 +34,70 @@ func (r Row) Height() int {
 	return h
 }
 
-// State is what the user has set: which rows are folded and whether the attention filter is on.
+// State is the folds the user has set, by effort id.
 type State struct {
-	Folded    map[string]bool
-	Attention bool
+	Folded map[string]bool
 }
 
-const (
-	GroupNoAgent = "group:no-agent"
-	GroupHidden  = "group:hidden"
-)
+// RollupShell stands in the rollup of a folded effort that holds shells and no agent.
+const RollupShell = "shell"
 
-func (st State) folded(n *model.Node) bool {
-	if v, ok := st.Folded[n.ID]; ok {
-		return v
-	}
-	return n.Shown == model.KindGroup
-}
-
-// needs is true for a row the user should look at, or one that leads to such a row.
-func needs(n *model.Node) bool {
-	if n.Status == model.Blocked || n.Status == model.Done {
-		return true
-	}
-	for _, c := range n.Children {
-		if needs(c) {
-			return true
-		}
-	}
-	return false
-}
-
-func statuses(nodes []*model.Node) []string {
+// agentStates is the states of the agents and workers among nodes and below them.
+func agentStates(nodes []*model.Node) []string {
 	var out []string
 	for _, n := range nodes {
-		out = append(out, n.Status)
-		out = append(out, statuses(n.Children)...)
+		if n.Shown == model.KindPane {
+			out = append(out, n.Status)
+		}
+		out = append(out, agentStates(n.Children)...)
 	}
 	return out
 }
 
-func group(id, name string, members []*model.Node) *model.Node {
-	return &model.Node{
-		ID: id, Focus: model.KindGroup, Shown: model.KindGroup,
-		Label: fmt.Sprintf("%s (%d)", name, len(members)), Children: members,
+func ofKind(nodes []*model.Node, k model.Kind) []*model.Node {
+	var out []*model.Node
+	for _, n := range nodes {
+		if n.Shown == k {
+			out = append(out, n)
+		}
 	}
+	return out
 }
 
-// sameCheckout is true when a row works in the checkout of the row it hangs from: the same
-// repository, and the same linked worktree or the main checkout for both.
-func sameCheckout(n, parent *model.Node) bool {
-	if parent == nil {
-		return n.Repo == ""
-	}
-	return n.Repo == parent.Repo && n.Worktree == parent.Worktree && (!n.Worktree || n.Where == parent.Where)
-}
-
-// Rows flattens the tree to the lines on screen.
+// Rows flattens the efforts to the rows on screen.
 func Rows(t model.Tree, st State) []Row {
 	var out []Row
-	var walk func(n *model.Node, depth int, trunk []bool, last bool, parent *model.Node)
-	walk = func(n *model.Node, depth int, trunk []bool, last bool, parent *model.Node) {
-		kids := n.Children
-		if st.Attention {
-			kids = nil
-			for _, c := range n.Children {
-				if needs(c) {
-					kids = append(kids, c)
-				}
+	var worker func(n *model.Node, depth int, trunk []bool, last bool)
+	worker = func(n *model.Node, depth int, trunk []bool, last bool) {
+		out = append(out, Row{Node: n, Depth: depth, Last: last, Trunk: trunk, Repo: n.Repo})
+		below := append(append([]bool(nil), trunk...), !last)
+		for _, s := range ofKind(n.Children, model.KindShell) {
+			out = append(out, Row{Node: s, Depth: depth + 1, Trunk: below})
+		}
+		ws := ofKind(n.Children, model.KindPane)
+		for i, w := range ws {
+			worker(w, depth+1, below, i == len(ws)-1)
+		}
+	}
+	for i, e := range t.Roots {
+		r := Row{Node: e, HasChildren: len(e.Children) > 0, Repo: e.Repo, Gap: i > 0}
+		r.Folded = r.HasChildren && st.Folded[e.ID]
+		if r.Folded {
+			if r.Rollup = agentStates(e.Children); len(r.Rollup) == 0 {
+				r.Rollup = []string{RollupShell}
 			}
-		}
-		r := Row{Node: n, Depth: depth, HasChildren: len(kids) > 0, Last: last, Trunk: trunk}
-		r.Folded = r.HasChildren && st.folded(n)
-		if depth == 0 && len(out) > 0 {
-			above := out[len(out)-1]
-			r.Gap = n.Shown != model.KindGroup || above.Depth > 0 || above.Node.Shown != model.KindGroup
-		}
-		if n.Shown != model.KindGroup && !sameCheckout(n, parent) {
-			r.Repo = n.Repo
-		}
-		if r.Folded && n.Shown != model.KindGroup {
-			r.Rollup = statuses(kids)
 		}
 		out = append(out, r)
-		if !r.Folded {
-			below := trunk
-			if depth > 0 {
-				below = append(append([]bool(nil), trunk...), !last)
-			}
-			for i, c := range kids {
-				walk(c, depth+1, below, i == len(kids)-1, n)
+		if r.Folded {
+			continue
+		}
+		for _, c := range e.Children {
+			out = append(out, Row{Node: c, Depth: 1})
+			ws := ofKind(c.Children, model.KindPane)
+			for j, w := range ws {
+				worker(w, 2, nil, j == len(ws)-1)
 			}
 		}
-	}
-	for _, n := range t.Roots {
-		if !st.Attention || needs(n) {
-			walk(n, 0, nil, true, nil)
-		}
-	}
-	if st.Attention {
-		return out
-	}
-	if len(t.NoAgent) > 0 {
-		walk(group(GroupNoAgent, "No agent", t.NoAgent), 0, nil, true, nil)
-	}
-	if len(t.Hidden) > 0 {
-		walk(group(GroupHidden, "Hidden", t.Hidden), 0, nil, true, nil)
 	}
 	return out
 }

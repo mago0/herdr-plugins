@@ -14,10 +14,10 @@ const Stalled = "stalled"
 
 // Theme is how states and row kinds are drawn. Plain draws with no color, for tests and scripts.
 type Theme struct {
-	Plain     bool
-	Colors    map[string]string
-	TabGlyph  string
-	PaneGlyph string
+	Plain  bool
+	Colors map[string]string
+	// ShellGlyph stands before the name of a pane that holds no agent.
+	ShellGlyph string
 	// WorktreeGlyph marks a row whose agent works in a linked Git worktree.
 	WorktreeGlyph string
 	// RepoColor is the color of the repo line under a row.
@@ -26,7 +26,7 @@ type Theme struct {
 	PendingGlyph string
 }
 
-// DefaultTheme uses Nerd Font glyphs for tab and pane rows.
+// DefaultTheme uses Nerd Font glyphs for the worktree and held prompts.
 func DefaultTheme() Theme {
 	return Theme{
 		Colors: map[string]string{
@@ -37,8 +37,7 @@ func DefaultTheme() Theme {
 			model.Unknown: "#6c7086",
 			Stalled:       "#fab387",
 		},
-		TabGlyph:      "\U000f04e9",
-		PaneGlyph:     "",
+		ShellGlyph:    "$",
 		WorktreeGlyph: "\ue0a0",
 		PendingGlyph:  "\uf0e0",
 	}
@@ -49,8 +48,7 @@ func LoadTheme(configDir string) Theme {
 	th := DefaultTheme()
 	var file struct {
 		Glyphs struct {
-			Tab      string `toml:"tab"`
-			Pane     string `toml:"pane"`
+			Shell    string `toml:"shell"`
 			Worktree string `toml:"worktree"`
 			Pending  string `toml:"pending"`
 		} `toml:"glyphs"`
@@ -59,11 +57,8 @@ func LoadTheme(configDir string) Theme {
 	if _, err := toml.DecodeFile(filepath.Join(configDir, "config.toml"), &file); err != nil {
 		return th
 	}
-	if file.Glyphs.Tab != "" {
-		th.TabGlyph = file.Glyphs.Tab
-	}
-	if file.Glyphs.Pane != "" {
-		th.PaneGlyph = file.Glyphs.Pane
+	if file.Glyphs.Shell != "" {
+		th.ShellGlyph = file.Glyphs.Shell
 	}
 	if c := file.Colors["repo"]; c != "" {
 		th.RepoColor = c

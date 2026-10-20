@@ -100,45 +100,34 @@ func TestProgramFocusErrorStaysOpen(t *testing.T) {
 	}
 }
 
-func TestProgramFoldSavesAndGroupsUnfoldOnEnter(t *testing.T) {
+func TestProgramFoldSavesAndEnterFocusesAnEffort(t *testing.T) {
 	f := &fake{tree: sample()}
 	p := start(t, f, f.deps())
 	p = send(t, p, key("space"))
 	if len(p.rows) != 4 || !p.rows[0].Folded {
-		t.Fatalf("space folds the selected parent, rows:\n%s", show(p.rows))
+		t.Fatalf("space folds the selected effort, rows:\n%s", show(p.rows))
 	}
 	if !f.saved["lead"] {
 		t.Fatalf("the fold is saved, got %v", f.saved)
 	}
-	p = send(t, p, key("down"), key("down"))
-	if selected(p) != GroupNoAgent {
-		t.Fatalf("selected %q", selected(p))
-	}
-	p = send(t, p, key("enter"))
-	if len(f.focused) != 0 {
-		t.Fatal("enter on a group must not focus anything")
-	}
-	if p.rows[p.cursor].Folded {
-		t.Fatalf("enter on a group unfolds it, rows:\n%s", show(p.rows))
-	}
-	p = send(t, p, key("space"))
+	p = send(t, p, key("down"))
 	before := len(p.rows)
-	p = send(t, p, key("up"), key("space"))
+	p = send(t, p, key("space"))
 	if selected(p) != "solo" || len(p.rows) != before {
-		t.Fatalf("space on a row with no children does nothing, rows:\n%s", show(p.rows))
+		t.Fatalf("space on an effort with no panes does nothing, rows:\n%s", show(p.rows))
+	}
+	_, cmd := p.Update(key("enter"))
+	cmd()
+	if len(f.focused) != 1 || f.focused[0] != "solo" {
+		t.Fatalf("enter on an effort focuses it, focused %v", f.focused)
 	}
 }
 
-func TestProgramAttentionAndQuit(t *testing.T) {
+func TestProgramQuit(t *testing.T) {
 	f := &fake{tree: sample()}
 	p := start(t, f, f.deps())
-	p = send(t, p, key("a"))
-	if len(p.rows) != 4 {
-		t.Fatalf("attention rows:\n%s", show(p.rows))
-	}
-	p = send(t, p, key("a"))
-	if len(p.rows) != 7 {
-		t.Fatalf("attention off rows:\n%s", show(p.rows))
+	if next, _ := p.Update(key("a")); len(next.(Program).rows) != 7 {
+		t.Fatal("a is no longer a key")
 	}
 	for _, k := range []string{"q", "esc"} {
 		if _, cmd := p.Update(key(k)); cmd == nil || cmd() != tea.Quit() {
@@ -162,13 +151,13 @@ func TestProgramKeepsSelectionAcrossReload(t *testing.T) {
 		t.Fatalf("after reload selected %q, want solo", selected(p))
 	}
 	// The selected node and everything after it go away: the cursor lands on the last row.
-	p = send(t, p, loadedMsg{tree: model.Tree{Roots: []*model.Node{node("lead", model.Idle)}}})
+	p = send(t, p, loadedMsg{tree: model.Tree{Roots: []*model.Node{effort("lead")}}})
 	if p.cursor != 0 || selected(p) != "lead" {
 		t.Fatalf("cursor %d on %q, want the last row", p.cursor, selected(p))
 	}
 	// Nothing left at all: no panic on any key.
 	p = send(t, p, loadedMsg{tree: model.Tree{}}, key("down"), key("space"), key("enter"))
-	if !strings.Contains(p.View(), "no agents") {
+	if !strings.Contains(p.View(), "no workspaces") {
 		t.Errorf("empty view:\n%s", p.View())
 	}
 }
@@ -199,7 +188,7 @@ func TestProgramLoadErrorKeepsTree(t *testing.T) {
 func TestProgramScrolls(t *testing.T) {
 	var roots []*model.Node
 	for _, id := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
-		roots = append(roots, node(id, model.Idle))
+		roots = append(roots, effort(id))
 	}
 	f := &fake{tree: model.Tree{Roots: roots}}
 	p := start(t, f, f.deps())
@@ -330,10 +319,10 @@ func TestSidebarWheelScrollsWithoutMovingTheCursor(t *testing.T) {
 }
 
 func TestSidebarPlacesTheCursorWhenTheFocusedPaneGetsARow(t *testing.T) {
-	f := &fake{tree: model.Tree{Roots: []*model.Node{node("solo", model.Idle)}}}
+	f := &fake{tree: model.Tree{Roots: []*model.Node{effort("solo")}}}
 	p := sidebar(t, f)
 	p = send(t, p, loadedMsg{tree: f.tree, current: "late"})
-	grown := model.Tree{Roots: []*model.Node{node("solo", model.Idle), node("late", model.Working)}}
+	grown := model.Tree{Roots: []*model.Node{effort("solo"), effort("late")}}
 	p = send(t, p, loadedMsg{tree: grown, current: "late"})
 	if selected(p) != "late" {
 		t.Fatalf("selected %q, want late", selected(p))
@@ -341,17 +330,19 @@ func TestSidebarPlacesTheCursorWhenTheFocusedPaneGetsARow(t *testing.T) {
 }
 
 func repos() model.Tree {
-	n := func(id, repo string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Repo: repo, Shown: model.KindWorkspace, WorkspaceID: "w-" + id, Children: kids}
+	n := func(id, repo string) *model.Node {
+		e := effort(id)
+		e.Repo = repo
+		return e
 	}
-	return model.Tree{Roots: []*model.Node{n("main", "flo", n("a", "iam"), n("b", "ops"), n("c", "api"))}}
+	return model.Tree{Roots: []*model.Node{n("a", "iam"), n("b", "ops"), n("c", "api")}}
 }
 
 func TestSidebarClickOnARepoLineSelectsItsRow(t *testing.T) {
 	f := &fake{tree: repos()}
 	p := sidebar(t, f)
-	// Lines: main, flo, a, iam, b, ops, c, api.
-	for y, want := range []string{"main", "main", "a", "a", "b", "b", "c", "c"} {
+	// Lines: a, iam, gap, b, ops, gap, c, api. A gap belongs to the row below it.
+	for y, want := range []string{"a", "a", "b", "b", "b", "c", "c", "c"} {
 		next, _ := p.Update(click(12, y))
 		if got := selected(next.(Program)); got != want {
 			t.Errorf("line %d selects %q, want %q", y, got, want)
@@ -365,7 +356,7 @@ func TestSidebarScrollKeepsBothLinesOfTheCursorRow(t *testing.T) {
 	p = send(t, p, tea.WindowSizeMsg{Width: 40, Height: 4})
 	p = send(t, p, key("down"), key("down"))
 	v := p.View()
-	if !strings.Contains(v, "o b") || !strings.Contains(v, "ops") {
+	if !strings.Contains(v, "  c") || !strings.Contains(v, "api") {
 		t.Fatalf("the name and repo of the cursor row are both in view:\n%s", v)
 	}
 	if n := strings.Count(v, "\n") + 1; n > 4 {
@@ -384,15 +375,14 @@ func TestSidebarRightClickAsksHerdrForTheMenuOfTheRow(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("a right-click on a row asks for its menu")
 	}
-	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;1;b;" {
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;1;;" {
 		t.Fatalf("request = %q", got)
 	}
 	if len(f.focused) != 0 {
 		t.Fatal("a right-click must not jump")
 	}
-	// A second request on the same row is a new title, so Herdr sees it.
 	_, cmd = next.(Program).Update(rightClick(12, 4))
-	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;2;b;" {
+	if got := fmt.Sprint(cmd()); got != "herdr-menu;workspace;w-b;2;;" {
 		t.Fatalf("second request = %q", got)
 	}
 }
@@ -402,11 +392,9 @@ func TestMenuTargetFollowsWhatTheRowShows(t *testing.T) {
 		n    model.Node
 		want string
 	}{
-		{model.Node{ID: "w1:p1", Shown: model.KindWorkspace, WorkspaceID: "w1", TabID: "w1:t1"}, "workspace;w1"},
 		{model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}, "workspace;w1"},
-		{model.Node{ID: "w1:p1", Shown: model.KindTab, WorkspaceID: "w1", TabID: "w1:t1"}, "tab;w1:t1"},
-		{model.Node{ID: "w1:p1", Shown: model.KindPane, WorkspaceID: "w1", TabID: "w1:t1"}, "pane;w1:p1"},
-		{model.Node{ID: GroupHidden, Shown: model.KindGroup}, ""},
+		{model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindPane, WorkspaceID: "w1"}, "pane;w1:p1"},
+		{model.Node{ID: "w1:p2", Focus: model.KindPane, Shown: model.KindShell, WorkspaceID: "w1"}, "pane;w1:p2"},
 	} {
 		if got := menuTarget(&c.n); got != c.want {
 			t.Errorf("%+v: target %q, want %q", c.n, got, c.want)
@@ -415,10 +403,10 @@ func TestMenuTargetFollowsWhatTheRowShows(t *testing.T) {
 }
 
 func places() model.Tree {
-	n := func(id, where string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, Where: where, Children: kids}
-	}
-	return model.Tree{Roots: []*model.Node{n("main", "~/src/flo", n("a", "iam/_worktrees/a"), n("b", "ops/_worktrees/b"))}}
+	e := effort("main", agent("a", model.Idle), agent("b", model.Idle))
+	e.Where = "~/src/flo"
+	e.Children[0].Where, e.Children[1].Where = "iam/_worktrees/a", "ops/_worktrees/b"
+	return model.Tree{Roots: []*model.Node{e}}
 }
 
 func lastLine(p Program) string {
@@ -456,14 +444,18 @@ func TestSidebarLastLineSaysWhereTheRowWorks(t *testing.T) {
 	}
 }
 
-func TestMenuRequestNamesTheAgentPaneOnlyForARowThatIsOneAgent(t *testing.T) {
-	agent := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Tag: "SRE-923"}
-	if got := menuTitle(agent, 3); got != "herdr-menu;workspace;w1;3;w1:p1;SRE-923" {
+func TestMenuRequestNamesThePaneOnlyForAnAgentRow(t *testing.T) {
+	a := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindPane, WorkspaceID: "w1", Tag: "SRE-923"}
+	if got := menuTitle(a, 3); got != "herdr-menu;pane;w1:p1;3;w1:p1;SRE-923" {
 		t.Errorf("agent row: %q", got)
 	}
-	holder := &model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}
-	if got := menuTitle(holder, 4); got != "herdr-menu;workspace;w1;4;;" {
-		t.Errorf("row that holds several agents: %q", got)
+	s := &model.Node{ID: "w1:p2", Focus: model.KindPane, Shown: model.KindShell, WorkspaceID: "w1"}
+	if got := menuTitle(s, 4); got != "herdr-menu;pane;w1:p2;4;;" {
+		t.Errorf("shell row: %q", got)
+	}
+	e := &model.Node{ID: "w1", Focus: model.KindWorkspace, Shown: model.KindWorkspace, WorkspaceID: "w1"}
+	if got := menuTitle(e, 5); got != "herdr-menu;workspace;w1;5;;" {
+		t.Errorf("effort row: %q", got)
 	}
 }
 
@@ -524,7 +516,7 @@ func TestSidebarStepJumpsOneRowFromTheFocusedPane(t *testing.T) {
 		t.Fatalf("selected %q, focused %v, want b from the focused pane a", selected(p), s.focused)
 	}
 	p = run(t, p, stepUp, stepUp)
-	if selected(p) != "lead" || fmt.Sprint(s.focused) != "[b a lead]" {
+	if selected(p) != "b1" || fmt.Sprint(s.focused) != "[b a b1]" {
 		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
 	}
 }
@@ -542,30 +534,30 @@ func TestSidebarStepIgnoresACursorThatLeftTheFocusedPane(t *testing.T) {
 	}
 }
 
-func TestSidebarStepSkipsGroupRowsAndWraps(t *testing.T) {
-	s := &stepper{fake: &fake{tree: sample()}, at: "solo"}
+func TestSidebarStepSkipsEffortAndShellRowsAndWraps(t *testing.T) {
+	s := &stepper{fake: &fake{tree: sample()}, at: "b1"}
 	p := run(t, s.start(t), stepDown)
-	if selected(p) != "lead" {
-		t.Fatalf("selected %q, want lead past the two group rows and the end", selected(p))
+	if selected(p) != "a" {
+		t.Fatalf("selected %q, want a past solo, repo1, sh1, the end and lead", selected(p))
 	}
 	p = run(t, p, stepUp)
-	if selected(p) != "solo" {
-		t.Fatalf("selected %q, want solo past the start and the two group rows", selected(p))
-	}
-	// An open group shows its rows, and a step stops on them.
-	p = send(t, p, key("down"), key("enter"))
-	p = run(t, p, stepDown)
-	if selected(p) != "repo1" || fmt.Sprint(s.focused) != "[lead solo repo1]" {
+	if selected(p) != "b1" || fmt.Sprint(s.focused) != "[a b1]" {
 		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
 	}
 }
 
-func TestSidebarStepSkipsTheRowsOfAFoldedParent(t *testing.T) {
-	s := &stepper{fake: &fake{tree: sample()}, at: "lead"}
-	p := send(t, s.start(t), key("space"))
+func TestSidebarStepSkipsTheRowsOfAFoldedEffort(t *testing.T) {
+	tree := model.Tree{Roots: []*model.Node{
+		effort("x", agent("x1", model.Idle)), effort("y", agent("y1", model.Idle)), effort("z", agent("z1", model.Idle)),
+	}}
+	s := &stepper{fake: &fake{tree: tree}, at: "x1"}
+	p := send(t, s.start(t), key("down"), key("down"), key("space"))
+	if !p.rows[2].Folded {
+		t.Fatalf("y is folded, rows:\n%s", show(p.rows))
+	}
 	p = run(t, p, stepDown)
-	if selected(p) != "solo" || fmt.Sprint(s.focused) != "[solo]" {
-		t.Fatalf("selected %q, focused %v, want solo", selected(p), s.focused)
+	if selected(p) != "z1" || fmt.Sprint(s.focused) != "[z1]" {
+		t.Fatalf("selected %q, focused %v, want z1", selected(p), s.focused)
 	}
 }
 
@@ -587,22 +579,22 @@ func TestSidebarStepsThatArriveTogetherEachMoveOneRow(t *testing.T) {
 		t.Fatalf("selected %q, focused %v", selected(p), s.focused)
 	}
 	p = run(t, p, stepDown)
-	if selected(p) != "solo" {
-		t.Fatalf("selected %q, want solo: the next step is not held back", selected(p))
+	if selected(p) != "a" {
+		t.Fatalf("selected %q, want a: the next step is not held back", selected(p))
 	}
 }
 
 func TestSidebarStepStaysOnARowThatPutsTheFocusOnAnotherRow(t *testing.T) {
-	// A jump to lead leaves the focus on its pane a, which has a row of its own.
-	s := &stepper{fake: &fake{tree: sample()}, at: "a", lands: map[string]string{"lead": "a"}}
+	// A jump to b1 leaves the focus on b, which has a row of its own.
+	s := &stepper{fake: &fake{tree: sample()}, at: "a", lands: map[string]string{"b1": "b"}}
 	p := run(t, s.start(t), stepUp)
-	p = send(t, p, loadedMsg{tree: s.tree, current: "a"})
-	if selected(p) != "lead" {
-		t.Fatalf("selected %q, want lead: a reload keeps the row of the step", selected(p))
+	p = send(t, p, loadedMsg{tree: s.tree, current: "b"})
+	if selected(p) != "b1" {
+		t.Fatalf("selected %q, want b1: a reload keeps the row of the step", selected(p))
 	}
 	p = run(t, p, stepUp)
-	if selected(p) != "solo" {
-		t.Fatalf("selected %q, want solo: the step goes on from lead", selected(p))
+	if selected(p) != "b" {
+		t.Fatalf("selected %q, want b: the step goes on from b1", selected(p))
 	}
 }
 
@@ -680,14 +672,14 @@ func TestSidebarLastLineSaysWhatABlockedRowWaitsFor(t *testing.T) {
 }
 
 func TestMenuTitleCarriesTheAnswersOfABlockedRow(t *testing.T) {
-	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Tag: "SRE-9",
+	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindPane, WorkspaceID: "w1", Tag: "SRE-9",
 		Dialog: "d1a109", Answers: []model.Answer{{Key: "1", Text: "Yes"}, {Key: "2", Text: `No "thanks"`}}}
-	want := `herdr-menu2;{"t":"workspace","i":"w1","p":"w1:p1","l":"SRE-9","d":"d1a109","a":[["1","Yes"],["2","No \"thanks\""]]}`
+	want := `herdr-menu2;{"t":"pane","i":"w1:p1","p":"w1:p1","l":"SRE-9","d":"d1a109","a":[["1","Yes"],["2","No \"thanks\""]]}`
 	if got := menuTitle(n, 1); got != want {
 		t.Fatalf("title = %s\nwant    %s", got, want)
 	}
-	// A row that holds several agents names no pane, so it can carry no answers.
-	n.Focus = model.KindWorkspace
+	// An effort row names no pane, so it can carry no answers.
+	n.ID, n.Focus, n.Shown = "w1", model.KindWorkspace, model.KindWorkspace
 	if got := menuTitle(n, 2); got != "herdr-menu;workspace;w1;2;;SRE-9" {
 		t.Fatalf("title = %s", got)
 	}
@@ -695,7 +687,7 @@ func TestMenuTitleCarriesTheAnswersOfABlockedRow(t *testing.T) {
 
 func TestMenuTitleFitsThePaneTitleLimit(t *testing.T) {
 	long := strings.Repeat("a long answer text ", 3)
-	n := &model.Node{ID: "w12:p34", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w12", Tag: "SRE-12345",
+	n := &model.Node{ID: "w12:p34", Focus: model.KindPane, Shown: model.KindPane, WorkspaceID: "w12", Tag: "SRE-12345",
 		Dialog: "0123456789abcdef"}
 	for i := 1; i <= 6; i++ {
 		n.Answers = append(n.Answers, model.Answer{Key: fmt.Sprint(i), Text: long})
@@ -713,14 +705,14 @@ func TestMenuTitleFitsThePaneTitleLimit(t *testing.T) {
 		}
 	}
 	// A request that cannot fit carries no answers. A cut request would not parse.
-	n.WorkspaceID = strings.Repeat("w", 300)
+	n.ID = strings.Repeat("w", 300)
 	if got := menuTitle(n, 1); strings.HasPrefix(got, "herdr-menu2;") {
 		t.Fatalf("an oversize request must fall back, got %d characters", len(got))
 	}
 }
 
 func TestMenuTitleCarriesNoMoreAnswersThanTheClientShows(t *testing.T) {
-	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindWorkspace, WorkspaceID: "w1", Dialog: "0123456789abcdef"}
+	n := &model.Node{ID: "w1:p1", Focus: model.KindPane, Shown: model.KindPane, WorkspaceID: "w1", Dialog: "0123456789abcdef"}
 	for i := 1; i <= 9; i++ {
 		n.Answers = append(n.Answers, model.Answer{Key: fmt.Sprint(i), Text: "a short answer"})
 	}
@@ -738,20 +730,16 @@ func drag(x, y int) tea.Msg {
 	return tea.MouseMsg{X: x, Y: y, Action: tea.MouseActionMotion, Button: tea.MouseButtonLeft}
 }
 
-// spaces is three roots, one space each. The second has two workers, and the last worker has
-// two tabs of one space.
+// spaces is three efforts, one space each. The second holds two agents.
 func spaces() model.Tree {
 	n := func(id, space string, kids ...*model.Node) *model.Node {
-		return &model.Node{ID: id, Label: id, Status: model.Idle, Shown: model.KindWorkspace, WorkspaceID: space, Children: kids}
+		e := effort(id, kids...)
+		e.WorkspaceID = space
+		return e
 	}
-	return model.Tree{
-		Roots: []*model.Node{
-			n("one", "w1"),
-			n("two", "w2", n("x", "w4"), n("y", "w5"), n("z1", "w6"), n("z2", "w6")),
-			n("three", "w3"),
-		},
-		NoAgent: []*model.Node{n("empty", "w7")},
-	}
+	x, y := agent("x", model.Idle), agent("y", model.Idle)
+	x.WorkspaceID, y.WorkspaceID = "w2", "w2"
+	return model.Tree{Roots: []*model.Node{n("one", "w1"), n("two", "w2", x, y), n("three", "w3")}}
 }
 
 // mover records each move as "<space><<before>".
@@ -799,16 +787,12 @@ func line(t *testing.T, p Program, id string) int {
 	return 0
 }
 
-func TestMoveKeysMoveARowAmongItsSiblings(t *testing.T) {
+func TestMoveKeysMoveAnEffort(t *testing.T) {
 	for _, c := range []struct{ row, key, want string }{
 		{"one", "shift+down", "w2<w1"},
 		{"three", "shift+up", "w3<w2"},
 		{"two", "shift+up", "w2<w1"},
-		{"x", "shift+down", "w5<w4"},
-		{"y", "shift+up", "w5<w4"},
-		// The two tabs of one space move as one: the next sibling is that of another space.
-		{"z2", "shift+up", "w6<w5"},
-		{"y", "shift+down", "w6<w5"},
+		{"two", "shift+down", "w3<w2"},
 	} {
 		m := &mover{}
 		p := on(t, m.start(t), c.row)
@@ -823,9 +807,9 @@ func TestMoveKeysMoveARowAmongItsSiblings(t *testing.T) {
 	}
 }
 
-func TestMoveKeysDoNothingAtTheEndsAndOnAGroup(t *testing.T) {
+func TestMoveKeysDoNothingAtTheEndsAndOnAPane(t *testing.T) {
 	for _, c := range []struct{ row, key string }{
-		{"one", "up"}, {"three", "down"}, {"x", "up"}, {"z1", "down"}, {GroupNoAgent, "up"}, {GroupNoAgent, "down"},
+		{"one", "up"}, {"three", "down"}, {"x", "up"}, {"x", "down"}, {"y", "up"},
 	} {
 		m := &mover{}
 		p := on(t, m.start(t), c.row)
@@ -848,17 +832,16 @@ func TestMoveReloadsTheTreeAndShowsAnError(t *testing.T) {
 	}
 }
 
-func TestDragPutsARowWhereItIsDropped(t *testing.T) {
+func TestDragPutsAnEffortWhereItIsDropped(t *testing.T) {
 	for _, c := range []struct{ from, to, want string }{
-		// Down: the row goes below the row it is dropped on.
+		// Down: the effort goes below the effort it is dropped on.
 		{"one", "two", "w1<w3"},
 		{"one", "three", "w1<"},
-		// A drop on a row deeper in the tree is a drop on the sibling that holds it.
+		// A drop on a pane row is a drop on the effort that holds it.
 		{"one", "y", "w1<w3"},
-		// Up: the row takes the place of the row it is dropped on.
+		// Up: the effort takes the place of the effort it is dropped on.
 		{"three", "one", "w3<w1"},
-		{"y", "x", "w5<w4"},
-		{"x", "z2", "w4<"},
+		{"three", "x", "w3<w2"},
 	} {
 		m := &mover{}
 		p := m.start(t)
@@ -873,11 +856,10 @@ func TestDragPutsARowWhereItIsDropped(t *testing.T) {
 	}
 }
 
-func TestDragToARowThatIsNoSiblingDoesNothing(t *testing.T) {
-	for _, c := range []struct{ from, to string }{{"x", "one"}, {"x", "three"}, {"one", "empty"}, {"z1", "z2"}} {
+func TestDragOfAPaneRowDoesNothing(t *testing.T) {
+	for _, c := range []struct{ from, to string }{{"x", "one"}, {"x", "three"}, {"y", "x"}} {
 		m := &mover{}
 		p := m.start(t)
-		p = send(t, on(t, p, GroupNoAgent), key("space"))
 		from, to := line(t, p, c.from), line(t, p, c.to)
 		p = run(t, p, click(12, from), drag(12, to), release(12, to))
 		if len(m.moves) != 0 || len(m.focused) != 0 {

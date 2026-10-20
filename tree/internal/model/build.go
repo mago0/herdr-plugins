@@ -1,6 +1,9 @@
 package model
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // of is the Git state g when it is that of the repository a row shows.
 func of(g Git, repo string) Git {
@@ -40,6 +43,15 @@ func Build(s Snapshot) Tree {
 		}
 	}
 
+	tabName := map[string]string{}
+	for _, t := range s.Tabs {
+		tabName[t.ID] = t.Label
+	}
+	inTab := map[string]int{}
+	for _, a := range visible {
+		inTab[a.TabID]++
+	}
+
 	nodes := map[string]*Node{}
 	for _, a := range visible {
 		repo := a.Repo
@@ -50,10 +62,15 @@ func Build(s Snapshot) Tree {
 		if a.Status == Blocked && a.Dialog != "" {
 			answers = Answers(a.Kind, a.BlockerLines)
 		}
+		label := AgentLabel(a)
+		// The user names a tab for the job in it; Herdr numbers the tabs that have no name.
+		if name := tabName[a.TabID]; inTab[a.TabID] == 1 && strings.Trim(name, "0123456789") != "" {
+			label = name
+		}
 		_, worker := up[a.PaneID]
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
-			Label: AgentLabel(a), Status: a.Status, Repo: repo, Where: a.Where, Worktree: a.Worktree,
+			Label: label, Status: a.Status, Repo: repo, Where: a.Where, Worktree: a.Worktree,
 			Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link, Pending: a.Pending, Stalled: a.Stalled,
 			Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
 			Worker: worker, Reported: a.Reported && a.Status != Working,

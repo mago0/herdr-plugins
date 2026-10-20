@@ -227,3 +227,27 @@ func TestBuildKeepsTheGitStateOfTheRepoARowShows(t *testing.T) {
 		t.Errorf("a worker with no repo of its own shows its workspace's repo and no branch, got %q %+v", workers[1].Repo, workers[1].Git)
 	}
 }
+
+func TestBuildAnAgentAloneInANamedTabTakesTheTabName(t *testing.T) {
+	named, numbered := ag("w1:p1", "lead"), ag("w1:p2", "second")
+	named.Title, numbered.Title = "Herdr layout mockup", "Infra review"
+	named.TabID, numbered.TabID = "w1:t1", "w1:t2"
+	a, b := ag("w1:p3", "a"), ag("w1:p4", "b")
+	a.TabID, b.TabID = "w1:t3", "w1:t3"
+	s := Snapshot{
+		Workspaces: []Workspace{ws("w1", "ops", "", 1)},
+		Tabs: []Tab{
+			{ID: "w1:t1", WorkspaceID: "w1", Label: "Dispatch"},
+			{ID: "w1:t2", WorkspaceID: "w1", Label: "2"},
+			{ID: "w1:t3", WorkspaceID: "w1", Label: "Pair"},
+		},
+		Agents: []Agent{named, numbered, a, b},
+	}
+	check(t, Build(s), `
+e ops
+  a Dispatch
+  a Infra review
+  a a
+  a b
+`)
+}

@@ -10,44 +10,38 @@ func of(g Git, repo string) Git {
 	return g
 }
 
-// Build turns the live Herdr state into the supervisor tree.
+// Build turns the live Herdr state into efforts: one for each workspace with an agent of its own
+// or no agent, holding its shells, its agents, and under each agent the workers it supervises.
 func Build(s Snapshot) Tree {
 	workspaces := append([]Workspace(nil), s.Workspaces...)
 	sort.SliceStable(workspaces, func(i, j int) bool { return workspaces[i].Number < workspaces[j].Number })
+	place := map[string]int{}
 	wsByID := map[string]Workspace{}
-	for _, w := range workspaces {
+	for i, w := range workspaces {
+		place[w.ID] = i
 		wsByID[w.ID] = w
 	}
-	tabs := append([]Tab(nil), s.Tabs...)
-	sort.SliceStable(tabs, func(i, j int) bool {
-		a, b := wsByID[tabs[i].WorkspaceID].Number, wsByID[tabs[j].WorkspaceID].Number
-		if a != b {
-			return a < b
-		}
-		return tabs[i].Number < tabs[j].Number
-	})
-	tabByID := map[string]Tab{}
-	for _, t := range tabs {
-		tabByID[t.ID] = t
-	}
 
-	var tree Tree
 	var visible []Agent
 	for _, a := range s.Agents {
-		if a.Hide {
-			tree.Hidden = append(tree.Hidden, &Node{
-				ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
-				Label: AgentLabel(a), Status: a.Status, Repo: wsByID[a.WorkspaceID].Repo,
-				Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, wsByID[a.WorkspaceID].Repo), Tag: a.Tag, Link: a.Link,
-			})
-			continue
+		if !a.Hide {
+			visible = append(visible, a)
 		}
-		visible = append(visible, a)
+	}
+	up := resolveLinks(visible)
+	home := map[string]string{}
+	for _, a := range visible {
+		home[a.PaneID] = a.WorkspaceID
+	}
+	// A supervisor in the same workspace does not make a worker: both stay agents of that workspace.
+	for pane, sup := range up {
+		if home[pane] == home[sup] {
+			delete(up, pane)
+		}
 	}
 
 	nodes := map[string]*Node{}
-	up := resolveLinks(visible)
-	for i, a := range visible {
+	for _, a := range visible {
 		repo := a.Repo
 		if repo == "" {
 			repo = wsByID[a.WorkspaceID].Repo
@@ -56,183 +50,66 @@ func Build(s Snapshot) Tree {
 		if a.Status == Blocked && a.Dialog != "" {
 			answers = Answers(a.Kind, a.BlockerLines)
 		}
+		_, worker := up[a.PaneID]
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
-			Label: AgentLabel(a), Status: a.Status, Repo: repo,
-			Where: a.Where, Worktree: a.Worktree, Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link,
-			Pending: a.Pending, Stalled: a.Stalled, Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
-			order: [3]int{wsByID[a.WorkspaceID].Number, tabByID[a.TabID].Number, i},
+			Label: AgentLabel(a), Status: a.Status, Repo: repo, Where: a.Where, Worktree: a.Worktree,
+			Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link, Pending: a.Pending, Stalled: a.Stalled,
+			Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
+			Worker: worker, Reported: a.Reported && a.Status != Working,
 		}
 	}
-
-	// A container holds several heads. When its dispatched heads share one supervisor it takes their
-	// place under that supervisor; heads of different supervisors stay under their own.
-	contain := func(c *Node, heads []string) bool {
-		supervisors := map[string]bool{}
-		for _, h := range heads {
-			if p, ok := up[h]; ok {
-				supervisors[p] = true
-			}
-		}
-		shared := len(supervisors) == 1
-		var inside []string
-		for _, h := range heads {
-			if _, dispatched := up[h]; !dispatched || shared {
-				inside = append(inside, h)
-			}
-		}
-		if len(inside) == 0 {
-			return false
-		}
-		nodes[c.ID] = c
-		for _, h := range inside {
-			if p, ok := up[h]; ok {
-				up[c.ID] = p
-			}
-			up[h] = c.ID
-		}
-		return true
-	}
-	// A container can close a loop that the pane links did not have. The node that is its own
-	// ancestor becomes a root, so no row drops out of the tree.
-	unloop := func() {
-		ids := make([]string, 0, len(up))
-		for id := range up {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		for _, id := range ids {
-			seen := map[string]bool{id: true}
-			for p := up[id]; p != ""; p = up[p] {
-				if p == id {
-					delete(up, id)
-					break
-				}
-				if seen[p] {
-					break
-				}
-				seen[p] = true
-			}
-		}
-	}
-
-	// Tab rows: one head and the tab row is that agent; several and the tab is a container.
-	tabRow := map[string]string{}
-	for _, t := range tabs {
-		var heads []string
-		for _, a := range visible {
-			if a.TabID != t.ID {
-				continue
-			}
-			if p, ok := nodes[up[a.PaneID]]; ok && p.TabID == t.ID {
-				continue
-			}
-			heads = append(heads, a.PaneID)
-		}
-		// When one head alone supervises workers, it stands for the tab and the heads that
-		// nothing dispatched hang under it.
-		if len(heads) > 1 {
-			supervises := map[string]bool{}
-			for _, p := range up {
-				supervises[p] = true
-			}
-			var leads []string
-			for _, h := range heads {
-				if supervises[h] {
-					leads = append(leads, h)
-				}
-			}
-			// A head that another agent dispatched keeps its own supervisor, so the tab then
-			// stays a holder.
-			free := len(leads) == 1
-			for _, h := range heads {
-				if _, dispatched := up[h]; free && h != leads[0] && dispatched {
-					free = false
-				}
-			}
-			if free {
-				for _, h := range heads {
-					if h != leads[0] {
-						up[h] = leads[0]
-					}
-				}
-				heads = leads
-			}
-		}
-		w := wsByID[t.WorkspaceID]
-		switch {
-		case len(heads) == 1:
-			n := nodes[heads[0]]
-			n.Label, n.Shown = t.Label, KindTab
-			tabRow[t.ID] = n.ID
-		case len(heads) > 1:
-			if contain(&Node{
-				ID: t.ID, Focus: KindTab, Shown: KindTab, TabID: t.ID, WorkspaceID: t.WorkspaceID,
-				Label: t.Label, Status: t.Status, Repo: nodes[heads[0]].Repo,
-				Where: nodes[heads[0]].Where, Worktree: nodes[heads[0]].Worktree, Git: nodes[heads[0]].Git,
-				order: [3]int{w.Number, t.Number, -1},
-			}, heads) {
-				tabRow[t.ID] = t.ID
-			}
-		}
-	}
-	unloop()
-
-	occupied := map[string]bool{}
 	for _, a := range visible {
-		occupied[a.WorkspaceID] = true
-	}
-
-	// Workspace rows: the same rule over the tab rows.
-	for _, w := range workspaces {
-		var heads []string
-		for _, t := range tabs {
-			id, ok := tabRow[t.ID]
-			if t.WorkspaceID != w.ID || !ok {
-				continue
-			}
-			if p, ok := nodes[up[id]]; ok && p.WorkspaceID == w.ID {
-				continue
-			}
-			heads = append(heads, id)
-		}
-		switch {
-		case !occupied[w.ID]:
-			tree.NoAgent = append(tree.NoAgent, &Node{
-				ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
-				Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
-			})
-		case len(heads) == 1:
-			n := nodes[heads[0]]
-			n.Label, n.Shown = w.Label, KindWorkspace
-		case len(heads) > 1:
-			contain(&Node{
-				ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
-				Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
-				order: [3]int{w.Number, -1, -1},
-			}, heads)
-		}
-	}
-	unloop()
-
-	less := func(a, b *Node) bool {
-		for i := range a.order {
-			if a.order[i] != b.order[i] {
-				return a.order[i] < b.order[i]
-			}
-		}
-		return a.ID < b.ID
-	}
-	for id, n := range nodes {
-		if p, ok := nodes[up[id]]; ok {
-			p.Children = append(p.Children, n)
-		} else {
-			tree.Roots = append(tree.Roots, n)
+		if sup, ok := up[a.PaneID]; ok {
+			nodes[sup].Children = append(nodes[sup].Children, nodes[a.PaneID])
 		}
 	}
 	for _, n := range nodes {
-		sort.Slice(n.Children, func(i, j int) bool { return less(n.Children[i], n.Children[j]) })
+		sort.SliceStable(n.Children, func(i, j int) bool {
+			return place[n.Children[i].WorkspaceID] < place[n.Children[j].WorkspaceID]
+		})
 	}
-	sort.Slice(tree.Roots, func(i, j int) bool { return less(tree.Roots[i], tree.Roots[j]) })
+
+	shells := map[string][]*Node{}
+	for _, p := range s.Shells {
+		label := p.Label
+		if label == "" {
+			label = p.Where
+		}
+		shells[p.WorkspaceID] = append(shells[p.WorkspaceID], &Node{
+			ID: p.PaneID, Focus: KindPane, Shown: KindShell, TabID: p.TabID, WorkspaceID: p.WorkspaceID,
+			Label: label, Status: Unknown, Where: p.Where,
+		})
+	}
+
+	var tree Tree
+	for _, w := range workspaces {
+		var own, workers []*Node
+		for _, a := range visible {
+			if a.WorkspaceID != w.ID {
+				continue
+			}
+			if n := nodes[a.PaneID]; n.Worker {
+				workers = append(workers, n)
+			} else {
+				own = append(own, n)
+			}
+		}
+		// A workspace whose agents all work for agents elsewhere is part of their effort.
+		if len(own) == 0 && len(workers) > 0 {
+			first := workers[0]
+			first.Children = append(append([]*Node(nil), shells[w.ID]...), first.Children...)
+			continue
+		}
+		e := &Node{
+			ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
+			Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
+		}
+		if len(own) > 0 {
+			e.Tag, e.Link = own[0].Tag, own[0].Link
+		}
+		e.Children = append(append([]*Node(nil), shells[w.ID]...), own...)
+		tree.Roots = append(tree.Roots, e)
+	}
 	return tree
 }

@@ -62,25 +62,25 @@ func TestAnswersGivesNoneWhenTheDialogIsNotSafeToAnswerByNumber(t *testing.T) {
 }
 
 func TestBuildPutsTheAnswersOfABlockedAgentOnItsRow(t *testing.T) {
-	a := ag("w1:p1", "w1:t1", "")
+	a := ag("w1:p1", "")
 	a.Kind, a.Status, a.Dialog, a.BlockerLines = "claude", Blocked, "d1a109", []string{"Allow?", "❯ 1. Yes", "2. No"}
-	idle := ag("w2:p1", "w2:t1", "")
+	idle := ag("w2:p1", "")
 	idle.Kind, idle.Dialog, idle.BlockerLines = "claude", "d1a109", []string{"Allow?", "❯ 1. Yes", "2. No"}
-	unnamed := ag("w3:p1", "w3:t1", "")
+	unnamed := ag("w3:p1", "")
 	unnamed.Kind, unnamed.Status, unnamed.BlockerLines = "claude", Blocked, []string{"Allow?", "❯ 1. Yes", "2. No"}
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "a", "", 1), ws("w2", "b", "", 2), ws("w3", "c", "", 3)},
-		Tabs:       []Tab{tab("w1:t1", "1", 1), tab("w2:t1", "1", 1), tab("w3:t1", "1", 1)},
 		Agents:     []Agent{a, idle, unnamed},
 	}
 	got := Build(s)
-	if len(got.Roots[0].Answers) != 2 || got.Roots[0].Dialog != "d1a109" {
-		t.Fatalf("a blocked row has its answers and its dialog, got %+v", got.Roots[0])
+	row := func(i int) *Node { return got.Roots[i].Children[0] }
+	if len(row(0).Answers) != 2 || row(0).Dialog != "d1a109" {
+		t.Fatalf("a blocked row has its answers and its dialog, got %+v", row(0))
 	}
-	if len(got.Roots[1].Answers) != 0 {
-		t.Fatalf("a row that is not blocked has no answers, got %+v", got.Roots[1].Answers)
+	if len(row(1).Answers) != 0 {
+		t.Fatalf("a row that is not blocked has no answers, got %+v", row(1).Answers)
 	}
-	if len(got.Roots[2].Answers) != 0 {
-		t.Fatalf("with no dialog name Herdr cannot check an answer, so the row has none, got %+v", got.Roots[2].Answers)
+	if len(row(2).Answers) != 0 {
+		t.Fatalf("with no dialog name Herdr cannot check an answer, so the row has none, got %+v", row(2).Answers)
 	}
 }

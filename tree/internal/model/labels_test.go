@@ -7,9 +7,9 @@ func TestAgentLabel(t *testing.T) {
 		a    Agent
 		want string
 	}{
-		{Agent{Name: "add-probe", Kind: "claude", Title: "x"}, "add-probe"},
-		{Agent{Kind: "pr-watch-86", Title: "/some/script"}, "pr-watch-86"},
-		{Agent{Kind: "claude", Title: "Plan the api redesign"}, "Plan the api redesign"},
+		{Agent{Name: "add-probe", Kind: "claude", Title: "Review infra"}, "Review infra"},
+		{Agent{Name: "add-probe", Kind: "claude"}, "add-probe"},
+		{Agent{Kind: "pr-watch-86"}, "pr-watch-86"},
 		{Agent{Kind: "codex", Title: "0123456789012345678901234567890123456789"}, "0123456789012345678901234567890123"},
 		{Agent{Kind: "claude"}, "claude"},
 		{Agent{}, "agent"},

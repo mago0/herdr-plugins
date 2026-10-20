@@ -1,4 +1,4 @@
-// Package model builds the supervisor tree from plain data. It does no I/O.
+// Package model builds the efforts of the sidebar from plain data. It does no I/O.
 package model
 
 // Agent states, as Herdr reports them in agent_status.
@@ -58,6 +58,17 @@ type Agent struct {
 	Blocker      string
 	BlockerLines []string
 	Dialog       string
+	// Reported is true when the dispatch ledger has the agent's worker_done taken by its supervisor.
+	Reported bool
+}
+
+// Shell is one pane that hosts no agent.
+type Shell struct {
+	PaneID, TabID, WorkspaceID string
+	// Label is the name the user gave the pane, or "".
+	Label string
+	// Where is "<repo>/<path in the repo>" inside a repository, else the path with home as ~.
+	Where string
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -65,6 +76,7 @@ type Snapshot struct {
 	Workspaces []Workspace
 	Tabs       []Tab
 	Agents     []Agent
+	Shells     []Shell
 	// FocusedPane and FocusedTab are the pane Herdr has in focus and its tab.
 	FocusedPane, FocusedTab string
 }
@@ -76,6 +88,8 @@ const (
 	KindTab
 	KindWorkspace
 	KindGroup
+	// KindShell is a pane with no agent.
+	KindShell
 )
 
 // Node is one row. Focus is what enter jumps to; Shown is what the row stands for on screen.
@@ -102,11 +116,14 @@ type Node struct {
 	// Dialog names that dialog, so that Herdr can refuse an answer for a dialog that is gone.
 	Answers  []Answer
 	Dialog   string
+	// Worker is true for an agent that an agent in another workspace supervises.
+	Worker bool
+	// Reported is true for a worker whose result its supervisor took and that is not working again.
+	Reported bool
 	Children []*Node
-	order    [3]int
 }
 
-// Tree is the built view: supervisors and their workers, then the two folded groups.
+// Tree is the built view: one effort for each workspace that has its own agent or no agent.
 type Tree struct {
 	Roots   []*Node
 	NoAgent []*Node

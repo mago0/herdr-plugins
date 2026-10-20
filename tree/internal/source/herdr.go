@@ -133,6 +133,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	hide := map[string]bool{}
 	tag := map[string]string{}
 	link := map[string]string{}
+	paneName := map[string]string{}
 	home, _ := os.UserHomeDir()
 	var s model.Snapshot
 	for _, p := range panes.Panes {
@@ -148,6 +149,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		if v := p.Tokens["link"]; v != nil {
 			link[p.Pane] = webAddress(*v)
 		}
+		paneName[p.Pane] = strings.TrimSpace(p.Label)
 	}
 	// Herdr names a workspace's repository only where a worktree action recorded it. For the
 	// others, the checkout of the first pane in the first tab stands in.
@@ -195,7 +197,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
 			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, top, linked, base), Tag: tag[a.Pane], Link: link[a.Pane],
 			Supervisor: a.Supervisor, Repo: repo, Pending: a.Pending, Stalled: a.Stalled != nil, Blocker: a.Blocker,
-			BlockerLines: a.Lines, Dialog: a.Dialog,
+			BlockerLines: a.Lines, Dialog: a.Dialog, PaneName: paneName[a.Pane],
 		})
 	}
 	isAgent := map[string]bool{}

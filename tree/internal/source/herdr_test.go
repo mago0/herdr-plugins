@@ -329,3 +329,20 @@ func TestSnapshotListsPanesWithNoAgentAsShells(t *testing.T) {
 		t.Fatalf("shells = %+v, want %+v", got.Shells, want)
 	}
 }
+
+func TestSnapshotReadsTheNameOfAnAgentPane(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"}]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","label":" Risk Sweep "}]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Agents[0].PaneName != "Risk Sweep" || len(got.Shells) != 0 {
+		t.Fatalf("pane name = %q, shells = %v", got.Agents[0].PaneName, got.Shells)
+	}
+}

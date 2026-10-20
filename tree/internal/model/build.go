@@ -64,8 +64,12 @@ func Build(s Snapshot) Tree {
 		}
 		label := AgentLabel(a)
 		// The user names a tab for the job in it; Herdr numbers the tabs that have no name.
+		// A name the user gave the pane itself is closer still.
 		if name := tabName[a.TabID]; inTab[a.TabID] == 1 && strings.Trim(name, "0123456789") != "" {
 			label = name
+		}
+		if a.PaneName != "" {
+			label = a.PaneName
 		}
 		_, worker := up[a.PaneID]
 		nodes[a.PaneID] = &Node{

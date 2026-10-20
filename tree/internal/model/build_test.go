@@ -251,3 +251,17 @@ e ops
   a b
 `)
 }
+
+func TestBuildAPaneNameComesBeforeTheTabNameAndTheTitle(t *testing.T) {
+	renamed := ag("w1:p1", "lead")
+	renamed.Title, renamed.PaneName, renamed.TabID = "Risk sweep prompt", "Risk Sweep", "w1:t1"
+	s := Snapshot{
+		Workspaces: []Workspace{ws("w1", "ops", "", 1)},
+		Tabs:       []Tab{{ID: "w1:t1", WorkspaceID: "w1", Label: "Soak"}},
+		Agents:     []Agent{renamed},
+	}
+	check(t, Build(s), `
+e ops
+  a Risk Sweep
+`)
+}

@@ -66,7 +66,7 @@ func (s Socket) Call(method string, params, result any) error {
 	return json.Unmarshal(reply.Result, result)
 }
 
-// Snapshot reads the workspaces, tabs and agent panes, and marks the panes that set tree=hide.
+// Snapshot reads the workspaces, tabs, agent panes and shells, and marks the panes that set tree=hide.
 func Snapshot(c Caller) (model.Snapshot, error) {
 	var ws struct {
 		Workspaces []struct {
@@ -111,11 +111,14 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 	}
 	var panes struct {
 		Panes []struct {
-			Pane    string             `json:"pane_id"`
-			Tab     string             `json:"tab_id"`
-			Focused bool               `json:"focused"`
-			Cwd     string             `json:"cwd"`
-			Tokens  map[string]*string `json:"tokens"`
+			Pane       string             `json:"pane_id"`
+			Tab        string             `json:"tab_id"`
+			Workspace  string             `json:"workspace_id"`
+			Label      string             `json:"label"`
+			Focused    bool               `json:"focused"`
+			Cwd        string             `json:"cwd"`
+			Foreground string             `json:"foreground_cwd"`
+			Tokens     map[string]*string `json:"tokens"`
 		} `json:"panes"`
 	}
 	for _, call := range []struct {
@@ -165,13 +168,13 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		if w.Worktree != nil {
 			m.Repo = w.Worktree.Repo
 			m.Where, m.Worktree = where(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, home), w.Worktree.Linked
-			if m.Git = gitState(w.Worktree.Root, w.Worktree.Linked); m.Git.Branch != "" {
+			if m.Git = gitState(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, upstream); m.Git.Branch != "" {
 				m.Git.Repo = m.Repo
 			}
 		} else if main, top, linked := checkout(cwd[first[w.ID]]); main != "" {
 			m.Repo = filepath.Base(main)
 			m.Where, m.Worktree = where(main, top, linked, home), linked
-			m.Git = gitState(main, linked)
+			m.Git = gitState(main, top, linked, upstream)
 		}
 		s.Workspaces = append(s.Workspaces, m)
 	}
@@ -190,9 +193,26 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		s.Agents = append(s.Agents, model.Agent{
 			PaneID: a.Pane, TabID: a.Tab, WorkspaceID: a.Workspace,
 			Name: a.Name, Kind: a.Kind, Title: a.Title, Status: a.Status, Hide: hide[a.Pane],
-			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, linked), Tag: tag[a.Pane], Link: link[a.Pane],
+			Where: where(main, top, linked, home), Worktree: linked, Git: gitState(main, top, linked, base), Tag: tag[a.Pane], Link: link[a.Pane],
 			Supervisor: a.Supervisor, Repo: repo, Pending: a.Pending, Stalled: a.Stalled != nil, Blocker: a.Blocker,
 			BlockerLines: a.Lines, Dialog: a.Dialog,
+		})
+	}
+	isAgent := map[string]bool{}
+	for _, a := range agents.Agents {
+		isAgent[a.Pane] = true
+	}
+	for _, p := range panes.Panes {
+		if isAgent[p.Pane] {
+			continue
+		}
+		dir := p.Foreground
+		if dir == "" {
+			dir = p.Cwd
+		}
+		s.Shells = append(s.Shells, model.Shell{
+			PaneID: p.Pane, TabID: p.Tab, WorkspaceID: p.Workspace,
+			Label: strings.TrimSpace(p.Label), Where: shellWhere(dir, home),
 		})
 	}
 	return s, nil

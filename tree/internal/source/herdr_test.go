@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -299,5 +300,33 @@ func TestSnapshotReadsTheLinkTokenWhenItIsAWebAddress(t *testing.T) {
 		if a.Link != "" {
 			t.Errorf("%s keeps the link %q, which is no web address", a.PaneID, a.Link)
 		}
+	}
+}
+
+func TestSnapshotListsPanesWithNoAgentAsShells(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "iam")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	deep := filepath.Join(repo, "terraform", "prod")
+	os.MkdirAll(deep, 0o755)
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"}]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"},
+			{"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","label":" shepherd ","cwd":"/elsewhere"},
+			{"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1","cwd":"/elsewhere","foreground_cwd":"` + deep + `"}]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []model.Shell{
+		{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Label: "shepherd", Where: "/elsewhere"},
+		{PaneID: "w1:p3", TabID: "w1:t1", WorkspaceID: "w1", Where: "iam/terraform/prod"},
+	}
+	if !reflect.DeepEqual(got.Shells, want) {
+		t.Fatalf("shells = %+v, want %+v", got.Shells, want)
 	}
 }

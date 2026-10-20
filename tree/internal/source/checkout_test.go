@@ -50,3 +50,24 @@ func TestWhere(t *testing.T) {
 		}
 	}
 }
+
+func TestShellWhere(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "src", "iam")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	os.MkdirAll(filepath.Join(repo, "env", "prod"), 0o755)
+	wt := filepath.Join(repo, "_worktrees", "feat")
+	os.MkdirAll(wt, 0o755)
+	os.WriteFile(filepath.Join(wt, ".git"), []byte("gitdir: "+filepath.Join(repo, ".git", "worktrees", "feat")+"\n"), 0o644)
+	for dir, want := range map[string]string{
+		repo:                               "iam",
+		filepath.Join(repo, "env", "prod"): "iam/env/prod",
+		wt:                                 "iam",
+		filepath.Join(home, "notes"):       "~/notes",
+		"":                                 "",
+	} {
+		if got := shellWhere(dir, home); got != want {
+			t.Errorf("shellWhere(%q) = %q, want %q", dir, got, want)
+		}
+	}
+}

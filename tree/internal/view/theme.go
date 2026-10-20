@@ -18,6 +18,8 @@ type Theme struct {
 	Colors map[string]string
 	// ShellGlyph stands before the name of a pane that holds no agent.
 	ShellGlyph string
+	// AutoGlyph stands before the name of a workspace or tab that herdr-automations opened.
+	AutoGlyph string
 	// WorktreeGlyph marks a row whose agent works in a linked Git worktree.
 	WorktreeGlyph string
 	// RepoColor is the color of the repo line under a row.
@@ -40,6 +42,7 @@ func DefaultTheme() Theme {
 			"shell": "#cba6f7",
 		},
 		ShellGlyph:    "$",
+		AutoGlyph:     "◷",
 		WorktreeGlyph: "\ue0a0",
 		PendingGlyph:  "\uf0e0",
 	}
@@ -51,6 +54,7 @@ func LoadTheme(configDir string) Theme {
 	var file struct {
 		Glyphs struct {
 			Shell    string `toml:"shell"`
+			Auto     string `toml:"auto"`
 			Worktree string `toml:"worktree"`
 			Pending  string `toml:"pending"`
 		} `toml:"glyphs"`
@@ -61,6 +65,9 @@ func LoadTheme(configDir string) Theme {
 	}
 	if file.Glyphs.Shell != "" {
 		th.ShellGlyph = file.Glyphs.Shell
+	}
+	if file.Glyphs.Auto != "" {
+		th.AutoGlyph = file.Glyphs.Auto
 	}
 	if c := file.Colors["repo"]; c != "" {
 		th.RepoColor = c

@@ -16,7 +16,8 @@ type Row struct {
 	Trunk []bool
 	// Rollup is the dot states of the agents and workers below a folded row.
 	Rollup []string
-	// Repo is the repository on the second line of an effort or a worker, or "".
+	// Repo is the repository on the second line of an effort, a worker, or an agent that works
+	// somewhere other than its effort, or "".
 	Repo string
 	// Gap is true for each effort after the first, which has a blank line above it.
 	Gap bool
@@ -64,6 +65,12 @@ func ofKind(nodes []*model.Node, k model.Kind) []*model.Node {
 	return out
 }
 
+// sameCheckout is true when an agent works in the checkout of its effort: the same repository,
+// and the same linked worktree or the main checkout for both.
+func sameCheckout(n, e *model.Node) bool {
+	return n.Repo == e.Repo && n.Worktree == e.Worktree && (!n.Worktree || n.Where == e.Where)
+}
+
 // Rows flattens the efforts to the rows on screen.
 func Rows(t model.Tree, st State) []Row {
 	var out []Row
@@ -94,6 +101,9 @@ func Rows(t model.Tree, st State) []Row {
 		for _, c := range e.Children {
 			ws := ofKind(c.Children, model.KindPane)
 			a := Row{Node: c, Depth: 1, HasChildren: len(ws) > 0}
+			if c.Shown == model.KindPane && !sameCheckout(c, e) {
+				a.Repo = c.Repo
+			}
 			if a.Folded = a.HasChildren && st.Folded[c.ID]; a.Folded {
 				a.Rollup = agentStates(ws)
 			}

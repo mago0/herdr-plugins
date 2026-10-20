@@ -115,10 +115,12 @@ Herdr sets `HERDR_SIDEBAR_SECTION` for such a pane. The pane then changes in the
 
 - **Effort:** one for each workspace, in Herdr's order. The name is bold. The right edge shows the label and link of the workspace's first agent: `SRE-923 ↗` for an issue, `proj ↗` for a Linear project. The line under it, at the column of the name, is the repo and branch, with the commits ahead of and behind the upstream.
 - **Shell:** a pane with no agent, marked with a `$` in its own color. It shows the pane's name, or where it is: `<repo>/<path>` inside a repository, else the path from `~`.
-- **Agent:** a pane with an agent. It shows the state dot and the name of its tab, when the tab has a name you gave it and no other agent. Otherwise it shows the title the session set, else the agent's name or kind.
+- **Agent:** a pane with an agent. It shows the state dot and the name of its tab, when the tab has a name you gave it and no other agent. Otherwise it shows the title the session set, else the agent's name or kind. When the agent works in another checkout than its effort, a second line under its title shows that repo and branch, with the commits ahead of and behind `origin/HEAD`.
 - **Worker:** an agent that an agent in another workspace supervises. It hangs from a branch line under that agent's dot. The right edge shows its label, else the number of the pull request it links. The line under it is the worktree glyph for a linked worktree, the repo and branch, the commits ahead of and behind `origin/HEAD`, and `reported` once its supervisor took its result. The worker's own shells follow, at its text column.
 
 Within an effort the shells come first, then each agent followed by its workers. A workspace whose agents are all workers is not an effort: its shells show under its first worker. A supervisor in the same workspace does not make a worker. A worker whose supervisor is gone is an agent of its own workspace again.
+
+A workspace or tab that [herdr-automations](https://github.com/DnzzL/herdr-automations) opened shows the automation's name with `◷` in front, without the `auto: ` prefix and the time.
 
 A folded effort is one line with a dot for each of its agents and workers, or `$` when it has only shells. An agent with workers folds the same way: its workers go, and their dots follow its name. Click the fold mark left of the dot, or press space on the row. Folds are saved.
 
@@ -165,6 +167,7 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source my-loop --token tree=hide
 [glyphs]
 # The default worktree and pending glyphs are Nerd Font icons. These work in any font.
 shell = "$"
+auto = "◷"
 worktree = "⎇"
 pending = "+"
 

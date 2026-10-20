@@ -234,3 +234,18 @@ func TestRenderAShellIsNotDimAndItsGlyphHasItsColor(t *testing.T) {
 		t.Errorf("the shell glyph has the shell color %q: %q", th.Colors["shell"], line)
 	}
 }
+
+func TestRenderAnAgentElsewhereAndAnAutomation(t *testing.T) {
+	run := &model.Node{ID: "w1:p2", Label: "flostag-watch", Status: model.Idle, Shown: model.KindPane, Auto: true,
+		Repo: "job-scheduler", Git: model.Git{Repo: "job-scheduler", Branch: "main", Behind: 19}}
+	e := &model.Node{ID: "w1", Label: "daily", Shown: model.KindWorkspace, Auto: true, Repo: "flosports",
+		Children: []*model.Node{run}}
+	th := plain()
+	th.AutoGlyph = "@"
+	same(t, Render(Rows(model.Tree{Roots: []*model.Node{e}}, State{}), 0, -1, th), []string{
+		" ▾ @ daily",
+		"   flosports",
+		"     o @ flostag-watch",
+		sp(7) + "job-scheduler@main -19",
+	})
+}

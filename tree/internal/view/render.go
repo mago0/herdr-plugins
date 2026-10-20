@@ -78,6 +78,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		switch {
 		case r.Depth == 0:
 			style, right = bold, effortTag(n)
+			if n.Auto {
+				head += th.paint(th.AutoGlyph+" ", faint)
+			}
 			if r.Folded {
 				after = "  " + rollup(r.Rollup, th)
 			}
@@ -85,6 +88,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 			head += th.shell() + " "
 		default:
 			head += th.dot(state(n)) + " "
+			if n.Auto {
+				head += th.paint(th.AutoGlyph+" ", faint)
+			}
 			if n.Pending > 0 {
 				after = " " + th.paint(th.pending(n.Pending), faint)
 			}
@@ -257,11 +263,14 @@ func lead(r Row) string {
 }
 
 // below is what comes before the second line of a row: under an effort, the indent of its name,
-// so the repo reads as part of the heading and not as a pane; under a worker, its branch line
-// running on to the next worker.
+// so the repo reads as part of the heading and not as a pane; under an agent, the indent of its
+// title; under a worker, its branch line running on to the next worker.
 func below(r Row) string {
-	if r.Depth == 0 {
+	switch r.Depth {
+	case 0:
 		return "  "
+	case 1:
+		return "      "
 	}
 	b := "    " + guides(r.Trunk)
 	if r.Last {

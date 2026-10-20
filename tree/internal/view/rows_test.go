@@ -110,14 +110,14 @@ func TestRowsBranchLinesOfWorkers(t *testing.T) {
 	}
 }
 
-func TestRowsRepoLineOnlyUnderEffortsAndWorkers(t *testing.T) {
+func TestRowsRepoLineUnderEffortsWorkersAndAgentsElsewhere(t *testing.T) {
 	a := agent("a", model.Idle, worker("w", model.Idle))
 	a.Repo, a.Children[0].Repo = "ops", "iam"
 	x := effort("x", a)
 	x.Repo = "flosports"
 	tree := model.Tree{Roots: []*model.Node{x, effort("y")}}
 	for _, r := range Rows(tree, State{}) {
-		want := map[string]string{"x": "flosports", "a": "", "w": "iam", "y": ""}[r.Node.ID]
+		want := map[string]string{"x": "flosports", "a": "ops", "w": "iam", "y": ""}[r.Node.ID]
 		if r.Repo != want {
 			t.Errorf("%s: repo %q, want %q", r.Node.ID, r.Repo, want)
 		}
@@ -136,4 +136,17 @@ func TestRowsFoldAnAgentWithWorkers(t *testing.T) {
  repo1 []
    sh1 []
 `)
+}
+
+func TestRowsRepoLineUnderAnAgentThatWorksElsewhere(t *testing.T) {
+	home, away, wt := agent("home", model.Idle), agent("away", model.Idle), agent("wt", model.Idle)
+	home.Repo, away.Repo, wt.Repo, wt.Worktree, wt.Where = "flosports", "job-scheduler", "flosports", true, "flosports/_worktrees/x"
+	e := effort("e", home, away, wt)
+	e.Repo = "flosports"
+	for _, r := range Rows(model.Tree{Roots: []*model.Node{e}}, State{}) {
+		want := map[string]string{"e": "flosports", "home": "", "away": "job-scheduler", "wt": "flosports"}[r.Node.ID]
+		if r.Repo != want {
+			t.Errorf("%s: repo %q, want %q", r.Node.ID, r.Repo, want)
+		}
+	}
 }

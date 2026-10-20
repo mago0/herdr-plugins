@@ -7,14 +7,14 @@ import "github.com/mago0/herdr-plugins/tree/internal/model"
 type Row struct {
 	Node  *model.Node
 	Depth int
-	// HasChildren and Folded are those of an effort. Only an effort folds.
+	// HasChildren and Folded are those of an effort, or of an agent with workers. Only those fold.
 	HasChildren bool
 	Folded      bool
 	// Last and Trunk place the branch lines of workers: Last is true for the last worker under the
 	// same row, and Trunk says for each worker above this row whether its line runs on past it.
 	Last  bool
 	Trunk []bool
-	// Rollup is the dot states of the agents and workers of a folded effort.
+	// Rollup is the dot states of the agents and workers below a folded row.
 	Rollup []string
 	// Repo is the repository on the second line of an effort or a worker, or "".
 	Repo string
@@ -92,8 +92,15 @@ func Rows(t model.Tree, st State) []Row {
 			continue
 		}
 		for _, c := range e.Children {
-			out = append(out, Row{Node: c, Depth: 1})
 			ws := ofKind(c.Children, model.KindPane)
+			a := Row{Node: c, Depth: 1, HasChildren: len(ws) > 0}
+			if a.Folded = a.HasChildren && st.Folded[c.ID]; a.Folded {
+				a.Rollup = agentStates(ws)
+			}
+			out = append(out, a)
+			if a.Folded {
+				continue
+			}
 			for j, w := range ws {
 				worker(w, 2, nil, j == len(ws)-1)
 			}

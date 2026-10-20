@@ -40,7 +40,7 @@ func TestRenderAnEffort(t *testing.T) {
 		" ▾ GKE Migration" + sp(22) + "proj ↗",
 		sp(5) + "flosports@main",
 		sp(5) + "$ Status",
-		sp(5) + "o HANDOFF.md resume",
+		"   ▾ o HANDOFF.md resume",
 		sp(5) + "└ o SRE-194 job scheduler" + sp(7) + "SRE-194",
 		sp(9) + "⎇ job-scheduler@sre-194",
 		sp(9) + "$ shepherd",
@@ -58,7 +58,7 @@ func TestRenderBranchLinesRunPastAWorkerToTheNextOne(t *testing.T) {
 	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
 	same(t, Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain()), []string{
 		" ▾ Main",
-		"     * lead",
+		"   ▾ * lead",
 		"     ├ o a",
 		"     │   iam",
 		"     │   $ reviewr",
@@ -94,7 +94,7 @@ func TestRenderWorkerTagAndRepoLine(t *testing.T) {
 	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
 	same(t, Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain()), []string{
 		" ▾ Main",
-		"     o lead",
+		"   ▾ o lead",
 		"     └ + Review infra base services  #1079",
 		sp(9) + "infra-base-services@main -1 +2  reported",
 	})
@@ -195,4 +195,25 @@ func TestRenderKeepsTheCountsAndReportedInANarrowPane(t *testing.T) {
 			t.Errorf("width %d:\n got %q\nwant %q", width, got, want)
 		}
 	}
+}
+
+func TestRenderAFoldedAgentShowsTheDotsOfItsWorkers(t *testing.T) {
+	w := func(id, status string) *model.Node {
+		return &model.Node{ID: id, Label: id, Status: status, Shown: model.KindPane, Worker: true, Repo: "iam"}
+	}
+	monitor := &model.Node{ID: "w1:p2", Label: "SRE Review Monitor", Status: model.Idle, Shown: model.KindPane,
+		Children: []*model.Node{w("a", model.Idle), w("b", model.Done)}}
+	dispatch := &model.Node{ID: "w1:p1", Label: "Dispatch", Status: model.Working, Shown: model.KindPane}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{dispatch, monitor}}
+	tree := model.Tree{Roots: []*model.Node{main}}
+	same(t, Render(Rows(tree, State{Folded: map[string]bool{"w1:p2": true}}), 0, -1, plain()), []string{
+		" ▾ Main",
+		"     * Dispatch",
+		"   ▸ o SRE Review Monitor  o +",
+	})
+	same(t, Render(Rows(tree, State{}), 0, -1, plain())[:3], []string{
+		" ▾ Main",
+		"     * Dispatch",
+		"   ▾ o SRE Review Monitor",
+	})
 }

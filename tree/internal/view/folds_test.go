@@ -18,8 +18,19 @@ func TestFoldsRoundTrip(t *testing.T) {
 	if err := SaveFolds(dir, folds, tree); err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"w1": true, "w2": false}
+	want := map[string]bool{"w1": true, "w2": false, "w1:p1": true}
 	if got := LoadFolds(dir); !reflect.DeepEqual(got, want) {
-		t.Fatalf("folds = %v, want %v (only efforts that are still there keep a fold)", got, want)
+		t.Fatalf("folds = %v, want %v (only efforts and their agents that are still there keep a fold)", got, want)
+	}
+}
+
+func TestFoldsKeepAgentsOfEfforts(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state")
+	tree := model.Tree{Roots: []*model.Node{{ID: "w1", Children: []*model.Node{{ID: "w1:p1", Children: []*model.Node{{ID: "w2:p1"}}}}}}}
+	if err := SaveFolds(dir, map[string]bool{"w1:p1": true, "w2:p1": true}, tree); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadFolds(dir); !reflect.DeepEqual(got, map[string]bool{"w1:p1": true}) {
+		t.Fatalf("folds = %v, want the agent of the effort only", got)
 	}
 }

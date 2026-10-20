@@ -22,11 +22,14 @@ func LoadFolds(dir string) map[string]bool {
 	return folds
 }
 
-// SaveFolds writes the folds of the efforts that are still there.
+// SaveFolds writes the folds of the efforts and their agents that are still there.
 func SaveFolds(dir string, folds map[string]bool, t model.Tree) error {
 	keep := map[string]bool{}
 	for _, n := range t.Roots {
 		keep[n.ID] = true
+		for _, c := range n.Children {
+			keep[c.ID] = true
+		}
 	}
 	out := map[string]bool{}
 	for id, v := range folds {

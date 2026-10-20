@@ -945,3 +945,25 @@ func TestOKeyOpensTheLinkOfTheCursorRow(t *testing.T) {
 		t.Fatalf("a row with no link opens nothing, opened %v", o.opened)
 	}
 }
+
+func TestSidebarFoldsAnAgentWithWorkers(t *testing.T) {
+	f := &fake{tree: sample()}
+	p := sidebar(t, f)
+	// Rows: lead, a, b, b1. The fold mark of b is left of its dot.
+	next, cmd := p.Update(click(3, 2))
+	p = next.(Program)
+	if cmd != nil || len(f.focused) != 0 {
+		t.Fatal("a click on the fold mark of an agent must not jump")
+	}
+	if !p.rows[2].Folded || !f.saved["b"] {
+		t.Fatalf("the click folds b and saves it, rows:\n%s", show(p.rows))
+	}
+	p = send(t, p, key("space"))
+	if selected(p) != "b" || p.rows[2].Folded {
+		t.Fatalf("space on b opens it again, rows:\n%s", show(p.rows))
+	}
+	p = send(t, on(t, p, "a"), key("space"))
+	if p.rows[1].Folded {
+		t.Fatal("an agent with no workers does not fold")
+	}
+}

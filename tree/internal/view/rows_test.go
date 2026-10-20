@@ -126,3 +126,14 @@ func TestRowsRepoLineOnlyUnderEffortsAndWorkers(t *testing.T) {
 		}
 	}
 }
+
+func TestRowsFoldAnAgentWithWorkers(t *testing.T) {
+	expect(t, Rows(sample(), State{Folded: map[string]bool{"b": true, "a": true}}), `
+ lead []
+   a []
+  +b [blocked]
+ solo []
+ repo1 []
+   sh1 []
+`)
+}

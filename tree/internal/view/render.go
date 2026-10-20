@@ -93,6 +93,9 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 				right = workerTag(n)
 			}
 		}
+		if r.Folded && r.Depth > 0 {
+			after += "  " + rollup(r.Rollup, th)
+		}
 		used := lipgloss.Width(head) + lipgloss.Width(after)
 		tail := 0
 		if right != "" {
@@ -222,7 +225,8 @@ func guides(trunk []bool) string {
 }
 
 // lead is what comes before the dot or glyph of a row: the fold mark of an effort, the indent of
-// its panes, and the branch line of a worker, which starts under the dot of the agent above it.
+// its panes with the fold mark of an agent that has workers, and the branch line of a worker,
+// which starts under the dot of the agent above it.
 func lead(r Row) string {
 	switch r.Depth {
 	case 0:
@@ -235,6 +239,12 @@ func lead(r Row) string {
 		}
 		return mark + " "
 	case 1:
+		switch {
+		case r.Folded:
+			return "  ▸ "
+		case r.HasChildren:
+			return "  ▾ "
+		}
 		return "    "
 	}
 	b := "    " + guides(r.Trunk)

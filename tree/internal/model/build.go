@@ -103,6 +103,13 @@ func Build(s Snapshot) Tree {
 		})
 	}
 
+	linked := map[string]bool{}
+	for _, w := range workspaces {
+		if w.Worktree {
+			linked[w.Repo] = true
+		}
+	}
+
 	var tree Tree
 	for _, w := range workspaces {
 		var own, workers []*Node
@@ -122,6 +129,9 @@ func Build(s Snapshot) Tree {
 			first.Children = append(append([]*Node(nil), shells[w.ID]...), first.Children...)
 			continue
 		}
+		if len(own) == 0 && w.DispatchParent && linked[w.Repo] && idle(shells[w.ID], w.Repo) {
+			continue
+		}
 		e := &Node{
 			ID: w.ID, Focus: KindWorkspace, Shown: KindWorkspace, WorkspaceID: w.ID,
 			Label: w.Label, Status: w.Status, Repo: w.Repo, Where: w.Where, Worktree: w.Worktree, Git: of(w.Git, w.Repo),
@@ -133,4 +143,15 @@ func Build(s Snapshot) Tree {
 		tree.Roots = append(tree.Roots, e)
 	}
 	return tree
+}
+
+// idle is true when every shell is unnamed and sits at the root of repo: the shell Herdr opens
+// with a dispatch parent, which the worker rows of that repo already stand for.
+func idle(shells []*Node, repo string) bool {
+	for _, p := range shells {
+		if p.Label != repo || p.Where != repo {
+			return false
+		}
+	}
+	return true
 }

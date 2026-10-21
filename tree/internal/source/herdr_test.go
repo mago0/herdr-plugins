@@ -197,6 +197,24 @@ func TestSnapshotNamesTheRepoOfAWorkspaceHerdrGivesNoWorktree(t *testing.T) {
 	}
 }
 
+func TestSnapshotMarksADispatchParent(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[
+			{"workspace_id":"w1","label":"puppet","number":1,"tokens":{"dispatch_parent":"1"}},
+			{"workspace_id":"w2","label":"notes","number":2,"tokens":null}]}}`,
+		"tab.list":   `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[]}}`,
+		"pane.list":  `{"id":"tree","result":{"panes":[]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Workspaces[0].DispatchParent || got.Workspaces[1].DispatchParent {
+		t.Fatalf("dispatch parents = %v, %v", got.Workspaces[0].DispatchParent, got.Workspaces[1].DispatchParent)
+	}
+}
+
 func TestSnapshotReadsTheLabelToken(t *testing.T) {
 	s := serve(t, map[string]string{
 		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,

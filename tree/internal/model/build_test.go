@@ -265,3 +265,39 @@ e ops
   a Risk Sweep
 `)
 }
+
+func TestBuildADispatchParentWithOnlyItsRootShellIsNoEffort(t *testing.T) {
+	parent := ws("w2", "puppet", "puppet", 2)
+	parent.DispatchParent = true
+	review := ws("w3", "review-puppet-679", "puppet", 3)
+	review.Worktree = true
+	s := under(Snapshot{
+		Workspaces: []Workspace{ws("w1", "Main", "flosports", 1), parent, review},
+		Agents:     []Agent{ag("w1:p1", "monitor"), ag("w3:p1", "review")},
+		Shells:     []Shell{sh("w2:p1", "", "puppet")},
+	}, "w1:p1", "w3:p1")
+	check(t, Build(s), `
+e Main
+  a monitor
+    a review worker
+`)
+}
+
+func TestBuildADispatchParentInUseIsAnEffort(t *testing.T) {
+	for name, edit := range map[string]func(*Snapshot){
+		"no worktree left":  func(s *Snapshot) { s.Workspaces = s.Workspaces[:1] },
+		"a named shell":     func(s *Snapshot) { s.Shells[0].Label = "deploy" },
+		"a shell elsewhere": func(s *Snapshot) { s.Shells[0].Where = "puppet/modules" },
+		"an agent":          func(s *Snapshot) { s.Agents = []Agent{ag("w2:p2", "lead")} },
+	} {
+		parent := ws("w2", "puppet", "puppet", 2)
+		parent.DispatchParent = true
+		review := ws("w3", "review", "puppet", 3)
+		review.Worktree = true
+		s := Snapshot{Workspaces: []Workspace{parent, review}, Shells: []Shell{sh("w2:p1", "", "puppet")}}
+		edit(&s)
+		if roots := Build(s).Roots; len(roots) == 0 || roots[0].ID != "w2" {
+			t.Errorf("%s: the parent is not an effort", name)
+		}
+	}
+}

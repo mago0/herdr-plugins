@@ -11,12 +11,14 @@ const (
 )
 
 // Workspace is one Herdr workspace. Where says where its checkout is, and Worktree is true when
-// that checkout is a linked Git worktree.
+// that checkout is a linked Git worktree. DispatchParent is true for the main checkout workspace
+// that Herdr opened for a dispatched worktree (token dispatch_parent=1).
 type Workspace struct {
 	ID, Label, Status, Repo string
 	Number                  int
 	Where                   string
 	Worktree                bool
+	DispatchParent          bool
 	Git                     Git
 }
 

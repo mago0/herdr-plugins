@@ -80,7 +80,7 @@ Delivery is ack-based: a message stays visible to `wait`, `ps` and `read --unack
 | `status` | result or progress, worker continues | relay if it changes what the user knows; `ack` |
 | `question` | worker is blocked in `mail.sh wait` on its inbox | `reply --id` (never type into the pane) |
 | `escalation` | blocked, needs a human | tell the user now; `ack` |
-| `worker_done` | finished or abandoned; `outcome` is `succeeded` or `failed` | verify, then `ack --decision reuse\|retain\|release` |
+| `worker_done` | finished or abandoned; `outcome` is `succeeded` or `failed` | verify, then `ack --decision release`. Release is the default. Retain or reuse only with a reason and a release condition, both stated in the same reply ("retain until the re-review lands"). Never force-remove a dirty worktree: report what is dirty and leave it for the user |
 
 `ack --decision release` removes the worktree (kills a live agent). A dirty worktree makes release fail with `dirty_worktree_requires_force`; the ledger still settles and the warning prints the exact force command - look at what is dirty first, unpushed work there is lost. `retain` keeps the worktree; `reuse` keeps the agent for an immediate follow-up via `dispatch.sh send --agent <name> --subject <s> --body <text>`.
 

@@ -203,6 +203,16 @@ close_idle_parent() {  # <repo path>
   herdr workspace close "$parent" >/dev/null 2>&1 || true
 }
 
+# Claude Code's per-cwd temp dir (tool output, subagent files, scratchpad) for a removed worktree.
+# The dir name is the cwd with every non-alphanumeric character replaced by "-".
+clear_claude_tmp() {
+  local wt=$1 dir
+  [ -n "$wt" ] || return 0
+  dir="${CLAUDE_CODE_TMPDIR:-/tmp}/claude-$(id -u)/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
+  [ -d "$dir" ] && rm -rf -- "$dir"
+  return 0
+}
+
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
 release_worker() {
   local agent=$1 D=$2 ws out E
@@ -221,6 +231,7 @@ release_worker() {
   if out=$(herdr worktree remove --workspace "$ws" 2>&1); then
     ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .released = $ts else . end)'
     close_idle_parent "$(jq -r '.launch.repo // empty' <<<"$E")"
+    clear_claude_tmp "$(jq -r '.worktree // empty' <<<"$E")"
   else
     echo "dispatch.sh: warning: release of $agent failed: $out" >&2
     echo "dispatch.sh: inspect the worktree, then: herdr worktree remove --workspace $ws --force" >&2

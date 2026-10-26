@@ -246,3 +246,27 @@ func TestRenderAnAgentThatWorksElsewhere(t *testing.T) {
 		sp(7) + "job-scheduler@main -19",
 	})
 }
+
+func TestShortKeepsTheEndsAndAbbreviatesTheMiddle(t *testing.T) {
+	for in, want := range map[string]string{
+		"~/.hermes/chief-of-staff/queue":     "~/.h/c/queue",
+		"flosports30/_worktrees/review-5394": "flosports30/_w/review-5394",
+		"herdr-plugins/status-pane":          "herdr-plugins/status-pane",
+		"/etc/systemd/system":                "/e/s/system",
+		"~":                                  "~",
+	} {
+		if got := short(in); got != want {
+			t.Errorf("short(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRenderAShellShowsItsCommandAfterItsFolder(t *testing.T) {
+	th := plain()
+	e := &model.Node{ID: "w1", Label: "ops", Shown: model.KindWorkspace,
+		Children: []*model.Node{{ID: "w1:p2", Label: "~/.config/herdr", Command: "watch", Shown: model.KindShell}}}
+	lines := Render(Rows(model.Tree{Roots: []*model.Node{e}}, State{}), 0, -1, th)
+	if got := strings.TrimSpace(lines[len(lines)-1]); got != "$ ~/.c/herdr  watch" {
+		t.Errorf("shell row = %q", got)
+	}
+}

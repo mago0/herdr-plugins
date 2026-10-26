@@ -92,14 +92,12 @@ func Build(s Snapshot) Tree {
 	}
 
 	shells := map[string][]*Node{}
+	named := map[string]bool{}
 	for _, p := range s.Shells {
-		label := p.Label
-		if label == "" {
-			label = p.Where
-		}
+		named[p.WorkspaceID] = named[p.WorkspaceID] || p.Label != ""
 		shells[p.WorkspaceID] = append(shells[p.WorkspaceID], &Node{
 			ID: p.PaneID, Focus: KindPane, Shown: KindShell, TabID: p.TabID, WorkspaceID: p.WorkspaceID,
-			Label: label, Status: Unknown, Where: p.Where,
+			Label: p.Where, Status: Unknown, Where: p.Where, Command: p.Command,
 		})
 	}
 
@@ -129,7 +127,7 @@ func Build(s Snapshot) Tree {
 			first.Children = append(append([]*Node(nil), shells[w.ID]...), first.Children...)
 			continue
 		}
-		if len(own) == 0 && w.DispatchParent && linked[w.Repo] && idle(shells[w.ID], w.Repo) {
+		if len(own) == 0 && w.DispatchParent && linked[w.Repo] && !named[w.ID] && idle(shells[w.ID], w.Repo) {
 			continue
 		}
 		e := &Node{
@@ -145,11 +143,11 @@ func Build(s Snapshot) Tree {
 	return tree
 }
 
-// idle is true when every shell is unnamed and sits at the root of repo: the shell Herdr opens
+// idle is true when every shell sits at the root of repo with no command: the shell Herdr opens
 // with a dispatch parent, which the worker rows of that repo already stand for.
 func idle(shells []*Node, repo string) bool {
 	for _, p := range shells {
-		if p.Label != repo || p.Where != repo {
+		if p.Where != repo || p.Command != "" {
 			return false
 		}
 	}

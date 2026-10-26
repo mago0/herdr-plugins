@@ -62,7 +62,7 @@ func TestShellWhere(t *testing.T) {
 	for dir, want := range map[string]string{
 		repo:                               "iam",
 		filepath.Join(repo, "env", "prod"): "iam/env/prod",
-		wt:                                 "iam",
+		wt:                                 "iam/_worktrees/feat",
 		filepath.Join(home, "notes"):       "~/notes",
 		"":                                 "",
 	} {

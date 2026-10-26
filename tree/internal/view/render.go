@@ -101,6 +101,12 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 			tail = 2 + lipgloss.Width(right)
 		}
 		label := n.Label
+		if n.Shown == model.KindShell {
+			label = short(label)
+			if n.Command != "" {
+				label += "  " + n.Command
+			}
+		}
 		if width > 0 {
 			label = cut(label, max(minLabel, width-used-tail))
 		}
@@ -126,6 +132,23 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		}
 	}
 	return lines
+}
+
+// short abbreviates each folder between the first and the last to its first letter, as fish
+// does: "~/.config/herdr/plugins" is "~/.c/h/plugins". A leading dot or underscore stays.
+func short(path string) string {
+	parts := strings.Split(path, "/")
+	for i := 1; i < len(parts)-1; i++ {
+		r := []rune(parts[i])
+		n := 1
+		if len(r) > 1 && (r[0] == '.' || r[0] == '_') {
+			n = 2
+		}
+		if len(r) > n {
+			parts[i] = string(r[:n])
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 // state is the state a row's dot shows: a working agent whose screen stands still is stalled.

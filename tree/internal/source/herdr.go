@@ -218,10 +218,38 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		}
 		s.Shells = append(s.Shells, model.Shell{
 			PaneID: p.Pane, TabID: p.Tab, WorkspaceID: p.Workspace,
-			Label: strings.TrimSpace(p.Label), Where: shellWhere(dir, home),
+			Label: strings.TrimSpace(p.Label), Where: shellWhere(dir, home), Command: foreground(c, p.Pane),
 		})
 	}
 	return s, nil
+}
+
+// shells are the programs that stand for an idle pane: a shell at its prompt.
+var shells = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "fish": true, "dash": true, "ksh": true, "tcsh": true, "nu": true,
+}
+
+// foreground is the name of the program in the pane's foreground, or "" when it is the shell or
+// Herdr cannot say.
+func foreground(c Caller, pane string) string {
+	var info struct {
+		Info struct {
+			Processes []struct {
+				Name string `json:"name"`
+			} `json:"foreground_processes"`
+		} `json:"process_info"`
+	}
+	if err := c.Call("pane.process_info", map[string]string{"pane_id": pane}, &info); err != nil {
+		return ""
+	}
+	if len(info.Info.Processes) == 0 {
+		return ""
+	}
+	name := strings.TrimPrefix(info.Info.Processes[0].Name, "-")
+	if shells[name] {
+		return ""
+	}
+	return name
 }
 
 // Focus moves Herdr to the pane, tab or workspace a row stands for.

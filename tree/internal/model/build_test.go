@@ -66,11 +66,11 @@ func TestBuildEffortListsShellsThenAgents(t *testing.T) {
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "flosports", 1)},
 		Agents:     []Agent{ag("w1:p1", "lead"), ag("w1:p2", "second")},
-		Shells:     []Shell{sh("w1:p3", "logs", "flosports")},
+		Shells:     []Shell{sh("w1:p3", "logs", "flosports/logs")},
 	}
 	check(t, Build(s), `
 e ops
-  s logs
+  s flosports/logs
   a lead
   a second
 `)
@@ -86,7 +86,7 @@ func TestBuildWorkerHangsUnderItsSupervisorWithItsShells(t *testing.T) {
 e ops
   a lead
     a add-probe worker
-      s reviewr
+      s iam
 e notes
   s ~/notes
 `)
@@ -135,7 +135,7 @@ func TestBuildAWorkspaceWithAnAgentOfItsOwnIsAnEffortBesideItsWorker(t *testing.
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "", 1), ws("w2", "side", "", 2)},
 		Agents:     []Agent{ag("w1:p1", "lead"), ag("w2:p1", "w"), ag("w2:p2", "own")},
-		Shells:     []Shell{sh("w2:p3", "sh", "")},
+		Shells:     []Shell{sh("w2:p3", "", "sh")},
 	}
 	check(t, Build(under(s, "w1:p1", "w2:p1")), `
 e ops
@@ -151,7 +151,7 @@ func TestBuildShellsOfAWorkerWorkspaceGoToItsFirstWorker(t *testing.T) {
 	s := Snapshot{
 		Workspaces: []Workspace{ws("w1", "ops", "", 1), ws("w2", "pair", "", 2)},
 		Agents:     []Agent{ag("w1:p1", "lead"), ag("w2:p1", "one"), ag("w2:p2", "two")},
-		Shells:     []Shell{sh("w2:p3", "sh", "")},
+		Shells:     []Shell{sh("w2:p3", "", "sh")},
 	}
 	check(t, Build(under(s, "w1:p1", "w2:p1", "w2:p2")), `
 e ops
@@ -288,6 +288,7 @@ func TestBuildADispatchParentInUseIsAnEffort(t *testing.T) {
 		"no worktree left":  func(s *Snapshot) { s.Workspaces = s.Workspaces[:1] },
 		"a named shell":     func(s *Snapshot) { s.Shells[0].Label = "deploy" },
 		"a shell elsewhere": func(s *Snapshot) { s.Shells[0].Where = "puppet/modules" },
+		"a busy shell":      func(s *Snapshot) { s.Shells[0].Command = "terraform" },
 		"an agent":          func(s *Snapshot) { s.Agents = []Agent{ag("w2:p2", "lead")} },
 	} {
 		parent := ws("w2", "puppet", "puppet", 2)
@@ -299,5 +300,15 @@ func TestBuildADispatchParentInUseIsAnEffort(t *testing.T) {
 		if roots := Build(s).Roots; len(roots) == 0 || roots[0].ID != "w2" {
 			t.Errorf("%s: the parent is not an effort", name)
 		}
+	}
+}
+
+func TestBuildAShellRowIsItsFolderAndCommand(t *testing.T) {
+	shell := sh("w1:p2", "deploy", "iam/terraform")
+	shell.Command = "terraform"
+	s := Snapshot{Workspaces: []Workspace{ws("w1", "ops", "iam", 1)}, Shells: []Shell{shell}}
+	n := Build(s).Roots[0].Children[0]
+	if n.Label != "iam/terraform" || n.Command != "terraform" {
+		t.Errorf("shell row = %q %q, want the folder and the command", n.Label, n.Command)
 	}
 }

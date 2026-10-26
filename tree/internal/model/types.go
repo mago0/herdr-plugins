@@ -73,6 +73,8 @@ type Shell struct {
 	Label string
 	// Where is "<repo>/<path in the repo>" inside a repository, else the path with home as ~.
 	Where string
+	// Command is the program in the pane's foreground, or "" when the shell itself is there.
+	Command string
 }
 
 // Snapshot is the live Herdr state. Agents are in Herdr's order.
@@ -108,6 +110,8 @@ type Node struct {
 	Git Git
 	// Tag is the label a user or agent set on the row's pane. It is drawn at the right edge.
 	Tag string
+	// Command is the program a shell row runs, or "".
+	Command string
 	// Link is the web address that the pane of the row names for its work, or "".
 	Link string
 	// Pending, Stalled and Blocker are those of the row's agent.

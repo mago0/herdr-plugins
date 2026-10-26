@@ -49,16 +49,19 @@ func checkout(dir string) (main, top string, linked bool) {
 	}
 }
 
-// shellWhere says where a shell is: "<repo>/<path in the repo>" inside a repository, else the
-// path with the home directory as ~.
+// shellWhere says where a shell is: "<repo>/<path in the repo>" inside a repository, with the
+// worktree path in a linked worktree, else the path with the home directory as ~.
 func shellWhere(dir, home string) string {
-	main, top, _ := checkout(dir)
+	main, top, linked := checkout(dir)
 	if main == "" {
 		return where("", dir, false, home)
 	}
 	rel, err := filepath.Rel(top, dir)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return where("", dir, false, home)
+	}
+	if linked {
+		return filepath.Join(where(main, top, true, home), rel)
 	}
 	return filepath.Join(filepath.Base(main), rel)
 }

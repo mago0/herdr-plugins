@@ -334,14 +334,16 @@ func TestSnapshotListsPanesWithNoAgentAsShells(t *testing.T) {
 			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1"},
 			{"pane_id":"w1:p2","tab_id":"w1:t1","workspace_id":"w1","label":" shepherd ","cwd":"/elsewhere"},
 			{"pane_id":"w1:p3","tab_id":"w1:t1","workspace_id":"w1","cwd":"/elsewhere","foreground_cwd":"` + deep + `"}]}}`,
+		"pane.process_info": `{"id":"tree","result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p2",
+			"foreground_processes":[{"pid":7,"name":"shepherd","cmdline":"/usr/bin/shepherd"}]}}}`,
 	})
 	got, err := Snapshot(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []model.Shell{
-		{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Label: "shepherd", Where: "/elsewhere"},
-		{PaneID: "w1:p3", TabID: "w1:t1", WorkspaceID: "w1", Where: "iam/terraform/prod"},
+		{PaneID: "w1:p2", TabID: "w1:t1", WorkspaceID: "w1", Label: "shepherd", Where: "/elsewhere", Command: "shepherd"},
+		{PaneID: "w1:p3", TabID: "w1:t1", WorkspaceID: "w1", Where: "iam/terraform/prod", Command: "shepherd"},
 	}
 	if !reflect.DeepEqual(got.Shells, want) {
 		t.Fatalf("shells = %+v, want %+v", got.Shells, want)
@@ -362,5 +364,18 @@ func TestSnapshotReadsTheNameOfAnAgentPane(t *testing.T) {
 	}
 	if got.Agents[0].PaneName != "Risk Sweep" || len(got.Shells) != 0 {
 		t.Fatalf("pane name = %q, shells = %v", got.Agents[0].PaneName, got.Shells)
+	}
+}
+
+func TestForegroundIsEmptyForAShellAtItsPrompt(t *testing.T) {
+	for name, want := range map[string]string{"zsh": "", "-bash": "", "watch": "watch"} {
+		s := serve(t, map[string]string{"pane.process_info": `{"id":"tree","result":{"process_info":{"pane_id":"w1:p1",
+			"foreground_processes":[{"pid":7,"name":"` + name + `"}]}}}`})
+		if got := foreground(s, "w1:p1"); got != want {
+			t.Errorf("foreground(%s) = %q, want %q", name, got, want)
+		}
+	}
+	if got := foreground(serve(t, map[string]string{}), "w1:p1"); got != "" {
+		t.Errorf("foreground with no reply = %q, want empty", got)
 	}
 }

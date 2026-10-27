@@ -31,10 +31,12 @@ ACKED="$INBOX.acked"
 # Un-acked messages, optionally filtered to a comma-separated type list, as JSON lines.
 unacked() {
   touch "$INBOX" "$ACKED"
-  jq -c --rawfile acked "$ACKED" --arg types "$TYPES" '
-    ($acked | split("\n") | map(select(length > 0))) as $a
+  # -n with inputs builds the acked set once, so a lookup per message is a key lookup.
+  jq -nc --rawfile acked "$ACKED" --arg types "$TYPES" '
+    ($acked | split("\n") | map(select(length > 0) | {key: ., value: true}) | from_entries) as $a
     | ($types | if . == "" then [] else split(",") end) as $t
-    | select(.id as $i | $a | any(. == $i) | not)
+    | inputs
+    | select((.id | type) != "string" or ($a[.id] | not))
     | select(($t | length) == 0 or (.type as $ty | $t | any(. == $ty)))' "$INBOX"
 }
 mail_line() { jq -r '"MAIL|\(.id)|\(.type)|\(.from)|\(.subject | gsub("[\n|]"; " "))"'; }

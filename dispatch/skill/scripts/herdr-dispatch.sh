@@ -9,6 +9,10 @@ Usage: herdr-dispatch.sh --repo <path> --branch <name> --name <agent-name> --pro
                          [--base <ref>] [--kind <herdr agent kind>]
                          [--run-dir <dir> | --inbox <file>]
                          [-- <native agent args>...]
+       herdr-dispatch.sh --resume <worktree> [--pane <id>] --name <agent-name> --prompt-file <file> --kind <kind>
+                         --run-dir <dir> -- <native agent args that resume the session>...
+  --resume   start the agent again in the existing worktree under the same name, in --pane when that
+             pane is still open on the worktree with no agent. The prompt file says it was interrupted.
   --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl and a per-worker inbox for replies.
              Used by dispatch.sh.
   --inbox    legacy single-mailbox mode (no worker inbox, no supervisor wake).
@@ -16,7 +20,7 @@ EOF
   exit 2
 }
 
-REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR=
+REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= RESUME_WT= REUSE_PANE=
 AGENT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -28,11 +32,13 @@ while [ $# -gt 0 ]; do
     --prompt-file) PROMPT_FILE=$2; shift 2 ;;
     --inbox) INBOX=$2; shift 2 ;;
     --run-dir) RUN_DIR=$2; shift 2 ;;
+    --resume) RESUME_WT=$2; shift 2 ;;
+    --pane) REUSE_PANE=$2; shift 2 ;;
     --) shift; AGENT_ARGS+=("$@"); break ;;
     *) usage ;;
   esac
 done
-[ -n "$REPO" ] && [ -n "$BRANCH" ] && [ -n "$NAME" ] && [ -r "$PROMPT_FILE" ] || usage
+{ [ -n "$REPO" ] && [ -n "$BRANCH" ] || [ -n "$RESUME_WT" ]; } && [ -n "$NAME" ] && [ -r "$PROMPT_FILE" ] || usage
 
 die() { echo "herdr-dispatch: $*" >&2; exit 1; }
 [ "${HERDR_ENV:-}" = "1" ] || die "not inside a Herdr pane (HERDR_ENV != 1)"
@@ -52,23 +58,31 @@ if [ -z "$KIND" ]; then
 fi
 
 # The main checkout owns _worktrees/, also when --repo points inside a linked worktree.
-COMMON=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir) || die "$REPO is not a git repo"
+COMMON=$(git -C "${RESUME_WT:-$REPO}" rev-parse --path-format=absolute --git-common-dir) || die "${RESUME_WT:-$REPO} is not a git repo"
 ROOT=$(dirname "$COMMON")
-SLUG=$(printf '%s' "$BRANCH" | tr '/' '-')
-WT="$ROOT/_worktrees/$SLUG"
+if [ -n "$RESUME_WT" ]; then
+  WT=$(cd "$RESUME_WT" && pwd); BRANCH=$(git -C "$WT" branch --show-current)
+else
+  SLUG=$(printf '%s' "$BRANCH" | tr '/' '-')
+  WT="$ROOT/_worktrees/$SLUG"
+fi
 
 # Local-only ignore; the repo's tracked .gitignore stays untouched.
 mkdir -p "$COMMON/info"
 grep -qxF '_worktrees/' "$COMMON/info/exclude" 2>/dev/null || echo '_worktrees/' >>"$COMMON/info/exclude"
 
 # Slug to 28 chars so the `-N` uniqueness suffix below still fits herdr's 32-char name limit.
-NAME=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[^a-z]+//; s/-+$//' | cut -c1-28)
+# A resumed agent keeps its name as it was.
+[ -n "$RESUME_WT" ] || NAME=$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_-]+/-/g; s/^[^a-z]+//; s/-+$//' | cut -c1-28)
 [ -n "$NAME" ] || die "agent name is empty after slugging"
 LIVE=$(herdr agent list | jq -r '.result.agents[]?.name // empty')
 BASE_NAME=$NAME; N=2
+# A resumed agent keeps its name, which is the key of its inbox.
+if [ -n "$RESUME_WT" ] && printf '%s\n' "$LIVE" | grep -qxF "$NAME"; then die "agent $NAME is still running"; fi
 while printf '%s\n' "$LIVE" | grep -qxF "$NAME"; do NAME="$BASE_NAME-$N"; N=$((N + 1)); done
 
 WT_EXISTS=; git -C "$ROOT" worktree list --porcelain | grep -qxF "worktree $WT" && WT_EXISTS=1
+[ -z "$RESUME_WT" ] || [ -n "$WT_EXISTS" ] || die "$WT is not a worktree of $ROOT"
 NEW_BRANCH=
 if [ -z "$WT_EXISTS" ] && ! git -C "$ROOT" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   NEW_BRANCH=1
@@ -85,16 +99,32 @@ parent_ws() {
 }
 PARENT_BEFORE=$(parent_ws)
 
-if [ -n "$WT_EXISTS" ]; then
+# A resumed agent goes back into its own pane when that pane is still open on the worktree, idle.
+PANE= WS=
+if [ -n "$RESUME_WT" ] && [ -n "$REUSE_PANE" ] && ! herdr agent get "$REUSE_PANE" >/dev/null 2>&1; then
+  WS=$(herdr pane get "$REUSE_PANE" 2>/dev/null | jq -r '.result.pane.workspace_id // empty' 2>/dev/null || true)
+  if [ -n "$WS" ] && [ "$(herdr workspace list 2>/dev/null | jq -r --arg w "$WS" \
+      'first(.result.workspaces[]? | select(.workspace_id == $w) | .worktree.checkout_path) // empty')" = "$WT" ]; then
+    PANE=$REUSE_PANE
+  else
+    WS=
+  fi
+fi
+
+if [ -n "$PANE" ]; then
+  :
+elif [ -n "$WT_EXISTS" ]; then
   OUT=$(herdr worktree open --cwd "$ROOT" --path "$WT" --label "$NAME" --no-focus)
 else
   ARGS=(--cwd "$ROOT" --branch "$BRANCH" --path "$WT" --label "$NAME" --no-focus)
   [ -z "$NEW_BRANCH" ] || ARGS+=(--base "$BASE")
   OUT=$(herdr worktree create "${ARGS[@]}")
 fi
-[ "$(echo "$OUT" | jq -r 'has("error")')" = "false" ] || die "worktree: $(echo "$OUT" | jq -r .error.message)"
-PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
-WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
+if [ -z "$PANE" ]; then
+  [ "$(echo "$OUT" | jq -r 'has("error")')" = "false" ] || die "worktree: $(echo "$OUT" | jq -r .error.message)"
+  PANE=$(echo "$OUT" | jq -r .result.root_pane.pane_id)
+  WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
+fi
 
 # Herdr also opens the main checkout as a parent workspace when none is open. The token marks
 # that parent as dispatch-made, so `dispatch.sh` release closes it after its last worktree.
@@ -176,9 +206,10 @@ warm_pane() {
 }
 warm_pane || echo "herdr-dispatch: warning: pane $PANE never ran a marker command; starting anyway" >&2
 
+LINE="Your task is in the file $TASK_FILE - read it now and carry it out in full."
+[ -z "$RESUME_WT" ] || LINE="You were interrupted and this session is resumed. Read the file $TASK_FILE now, before anything else, and follow it."
 for _ in 1 2 3; do
-  START=$(herdr agent start "$NAME" --kind "$KIND" --pane "$PANE" --timeout 60000 -- "${AGENT_ARGS[@]}" \
-    "Your task is in the file $TASK_FILE - read it now and carry it out in full." 2>&1 || true)
+  START=$(herdr agent start "$NAME" --kind "$KIND" --pane "$PANE" --timeout 60000 -- "${AGENT_ARGS[@]}" "$LINE" 2>&1 || true)
   CODE=$(echo "$START" | jq -r '.error.code // empty' 2>/dev/null || echo unparsable)
   [ -n "$CODE" ] || break
   if [ "$CODE" = agent_pane_busy ]; then sleep 3; continue; fi

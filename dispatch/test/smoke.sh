@@ -228,4 +228,59 @@ DISPATCH_MAX_ATTEMPTS=1 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 &
 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 || true
 "$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_q1")] | length == 1' >/dev/null || fail "an entry with no supersedes field was not retried"
 
+# Resume continues an attempt's own session in its worktree. --dry-run shows the native resume args
+# per kind; the launcher is not run, so nothing opens in Herdr.
+SID=11111111-2222-3333-4444-555555555555
+resumable() {  # <dispatch> <agent> <session agent> <session value> [extra json]
+  local x=${5:-}; [ -n "$x" ] || x="{}"
+  mkdir -p "$WTS/$2"
+  jq --arg d "$1" --arg a "$2" --arg k "$3" --arg v "$4" --arg wt "$WTS/$2" --argjson x "$x" \
+    '. + [{dispatch: $d, attempt: 1, supersedes: null, status: "working", agent: $a, pane_id: "fk:none", worktree: $wt,
+           prompt_file: "/prompts/first.md", after: [], session: (if $v == "" then null else {agent: $k, kind: "id", value: $v} end),
+           launch: {task: "/t.md", kind: "", agent_args: ["--model", "m"]}} + $x]' "$L" >"$L.new" && mv "$L.new" "$L"
+}
+plan() { dsp resume --run smoke --dispatch "$1" --dry-run; }
+resumable d_rc rc claude "$SID"
+resumable d_rx rx codex "$SID"
+resumable d_rp rp pi "$PT"
+plan d_rc | jq -e --arg s "$SID" --arg wt "$WTS/rc" '.agent_args == ["--model", "m", "--resume", $s] and .kind == "claude"
+  and .agent == "rc" and .worktree == $wt and .pane == "fk:none" and .task == "/prompts/first.md" and .attempts == 1' >/dev/null || fail "claude resume plan: $(plan d_rc)"
+plan d_rx | jq -e --arg s "$SID" '.agent_args == ["resume", "--model", "m", $s]' >/dev/null || fail "codex resume plan: $(plan d_rx)"
+plan d_rp | jq -e --arg s "$PT" '.agent_args == ["--model", "m", "--session", $s]' >/dev/null || fail "pi resume plan: $(plan d_rp)"
+"$D" list --run smoke | jq -e '[.[] | select(.resume != null)] | length == 0' >/dev/null || fail "--dry-run wrote the ledger"
+"$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_rc") | .attention == "exited" and (.next | test("resume --dispatch d_rc"))' >/dev/null || fail "ps does not offer resume"
+
+# Refusals, each pointing at retry where retry is the way on.
+refuses() {  # <dispatch> <pattern>
+  local out n; n=$("$D" list --run smoke | jq --arg d "$1" '[.[] | select(.supersedes == $d)] | length')
+  out=$(dsp resume --run smoke --dispatch "$1" 2>&1) && fail "resume of $1 was not refused"
+  grep -q -- "$2" <<<"$out" || fail "resume of $1: $out"
+  "$D" list --run smoke | jq -e --arg d "$1" --argjson n "$n" '[.[] | select(.supersedes == $d)] | length == $n' >/dev/null || fail "a refused resume of $1 wrote an attempt"
+}
+resumable d_ro ro omp /s.jsonl
+refuses d_ro "does not know how to resume a omp session; start the task again from its prompt instead: .*retry --dispatch d_ro"
+resumable d_rn rn claude ""
+refuses d_rn "has no recorded session; .*retry --dispatch d_rn"
+resumable d_rg rg claude "$SID"; rmdir "$WTS/rg"
+refuses d_rg "worktree of d_rg is gone .*retry --dispatch d_rg"
+resumable d_rl rl claude "$SID"; fake fk:rl rl claude id "$SID"; cp "$FA/fk:rl" "$FA/rl"
+refuses d_rl "agent rl is still running"
+resumable d_r6 r6 claude "$SID" '{"supersedes": "d_r5"}'
+refuses d_r6 "has run [0-9]* attempts .*the limit is 5. Pass --force"
+dsp resume --run smoke --dispatch d_r6 --force --dry-run | jq -e '.attempts > 5' >/dev/null || fail "--force did not lift the cap on resume"
+resumable d_rs rs claude "$SID"
+jq '. + [{dispatch: "d_rs2", attempt: 2, supersedes: "d_rs", status: "working", agent: "rs", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+refuses d_rs "already has a newer attempt d_rs2"
+
+# A real resume writes a linked attempt and the notice, then the launcher stops before Herdr
+# (no HERDR_ENV), so the attempt is failed_start.
+HERDR_ENV= dsp resume --run smoke --dispatch d_rc >/dev/null 2>&1 || true
+"$D" list --run smoke | jq -e --arg s "$SID" '(.[] | select(.dispatch == "d_rc") | .status == "abandoned")
+  and ([.[] | select(.supersedes == "d_rc")] | length == 1 and (.[0] | .attempt == 2 and .resume.from == "d_rc"
+       and .resume.session == $s and .launch.kind == "claude" and .status == "failed_start"))' >/dev/null || fail "resume ledger: $("$D" list --run smoke | jq -c '.[] | select(.supersedes == "d_rc")')"
+NOTE=$("$D" list --run smoke | jq -r '.[] | select(.supersedes == "d_rc") | .resume.notice')
+grep -q 'git status' "$NOTE" && grep -qF "$WTS/rc" "$NOTE" && grep -q "/prompts/first.md" "$NOTE" || fail "resume notice: $(cat "$NOTE")"
+rc=0; HERDR_ENV= "$(dirname "$D")/herdr-dispatch.sh" --resume "$WTS/rc" --name rc --prompt-file "$NOTE" --kind claude --run-dir "$ST/runs/smoke" 2>/dev/null || rc=$?
+[ "$rc" = 1 ] || fail "the launcher did not take --resume in place of --repo and --branch (exit $rc)"
+
 echo "smoke ok"

@@ -20,7 +20,7 @@ For a short exchange with an agent beside you, use it. It is simpler. It stops f
 - **Durable and acked.** Mail stays until it is acknowledged, so it survives a restart, a context compaction or a missed wake. Herdr events are not replayed. A report carries a key, and a repeat of a key is not sent again, so a worker can resend when it is not sure.
 - **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while the target pane is focused, holds text you typed and did not send, or its agent works or is at a dialog. You get a toast, and Herdr types it when that ends.
 - **Blocked, stalled and dead workers are reported at once**, with the text of the dialog a blocked worker shows.
-- **A lifecycle around each worker.** A worktree per task, a ledger of attempts, retries (5 per task unless forced), dependencies, and an explicit keep or release decision at the end.
+- **A lifecycle around each worker.** A worktree per task, a ledger of attempts, retries and resumes (5 attempts per task unless forced), dependencies, and an explicit keep or release decision at the end. A resume continues the same conversation in the same worktree.
 - **External polls move out of the harness.** A command that watches a chat thread or a pull request runs as a Herdr job, with no pane and no time limit, and wakes an agent only when something changed.
 
 If you have used Orca's orchestration, this is that model for Herdr: runs, typed and acked messages, and a fleet view, with wakes delivered by push.
@@ -97,6 +97,7 @@ The same news is not delivered twice in a row, so the command needs no bookkeepi
 
 - `stalled` finds a frozen agent. An agent that still animates while it waits on a tool that never returns is not found.
 - Wake delivery was tested with Claude Code. Other agent kinds queue typed input in their own way.
+- `dispatch.sh resume` knows Claude Code, Codex and pi. Other kinds, omp among them, start again from the task with `retry`. A resumed agent cannot know whether its last tool call finished, so it is told to check before it goes on.
 - Herdr events are kept in memory. `herdr events read` reports `lost` for a cursor that is too old or from before a restart, and `dispatch.sh ps` is the reconcile path.
 
 ## How it is built

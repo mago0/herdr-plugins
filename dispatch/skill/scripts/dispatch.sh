@@ -18,7 +18,9 @@
 #   dispatch.sh send    --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
 #   dispatch.sh ps      [--json]                                 fleet: status, liveness, attention, next action
 #   dispatch.sh retry   --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
-#                       refused once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
+#                       retry and resume refuse once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
+#   dispatch.sh resume  --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
+#                       worktree (claude, codex, pi with a recorded session); --dry-run prints the plan and writes nothing
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
@@ -159,16 +161,25 @@ nudge() {  # <agent> <prompt line>
 }
 
 launch_dispatch() {
-  local D=$1 spec
+  local D=$1 spec res
   spec=$(entry "$D" | jq -c .launch)
   [ -n "$spec" ] && [ "$spec" != null ] || { echo "dispatch.sh: no launch spec for $D" >&2; return 1; }
-  local args=(--repo "$(jq -r .repo <<<"$spec")" --branch "$(jq -r .branch <<<"$spec")" \
-              --name "$(jq -r .name <<<"$spec")" \
-              --prompt-file "$(jq -r .task <<<"$spec")" --run-dir "$RUN_DIR")
-  # No kind in the spec means inherit the caller's: the launcher resolves it.
-  local kind; kind=$(jq -r '.kind // ""' <<<"$spec"); [ -z "$kind" ] || args+=(--kind "$kind")
-  local base; base=$(jq -r '.base // ""' <<<"$spec"); [ -z "$base" ] || args+=(--base "$base")
-  local aargs=(); while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]?' <<<"$spec")
+  res=$(entry "$D" | jq -c '.resume // empty')
+  local args=() aargs=() x
+  if [ -n "$res" ]; then
+    args=(--resume "$(jq -r .worktree <<<"$res")" --name "$(jq -r .agent <<<"$res")" \
+          --prompt-file "$(jq -r .notice <<<"$res")" --run-dir "$RUN_DIR" --kind "$(jq -r .kind <<<"$res")")
+    x=$(jq -r '.pane // ""' <<<"$res"); [ -z "$x" ] || args+=(--pane "$x")
+    while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]' <<<"$res")
+  else
+    args=(--repo "$(jq -r .repo <<<"$spec")" --branch "$(jq -r .branch <<<"$spec")" \
+          --name "$(jq -r .name <<<"$spec")" \
+          --prompt-file "$(jq -r .task <<<"$spec")" --run-dir "$RUN_DIR")
+    # No kind in the spec means inherit the caller's: the launcher resolves it.
+    x=$(jq -r '.kind // ""' <<<"$spec"); [ -z "$x" ] || args+=(--kind "$x")
+    x=$(jq -r '.base // ""' <<<"$spec"); [ -z "$x" ] || args+=(--base "$x")
+    while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]?' <<<"$spec")
+  fi
   [ ${#aargs[@]} -eq 0 ] || args+=(-- "${aargs[@]}")
 
   local receipt rc=0 t0; t0=$(now)
@@ -514,6 +525,8 @@ case "$CMD" in
          elif $att == "question" then "\($mail) reply --id \($mid) --body ..."
          elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
          elif $att == "stalled" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
+         elif $att == "exited" and ($e.session.value != null) and (["claude", "codex", "pi"] | index($e.session.agent) != null)
+           then "inspect; \($mail) resume --dispatch \($e.dispatch), retry or abandon"
          elif $att == "exited" then "inspect; \($mail) retry --dispatch \($e.dispatch) or abandon"
          elif $att == "failed_start" then "\($mail) show --dispatch \($e.dispatch); \($mail) retry --dispatch \($e.dispatch)"
          elif $att == "status" then "\($mail) read --id \($mid); \($mail) ack --id \($mid)"
@@ -546,6 +559,61 @@ case "$CMD" in
     record_session "$D"
     ledger_mod --arg d "$D" --argjson n "$NEW" 'map(if .dispatch == $d and .status != "settled" then .status = "abandoned" else . end) + [$n]'
     if deps_met "$N"; then launch_dispatch "$N"; else jq -cn --arg d "$N" '{dispatch: $d, status: "pending"}'; fi
+    ;;
+
+  resume)
+    bind_run
+    D= FORCE=0 DRY=0
+    while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; --force) FORCE=1; shift ;; --dry-run) DRY=1; shift ;; *) die "resume: unknown option $1" ;; esac; done
+    OLD=$(entry "$D"); [ -n "$OLD" ] || die "no dispatch $D in run $RUN"
+    RETRY="start the task again from its prompt instead: $0 retry --dispatch $D"
+    AGENT=$(jq -r '.agent // empty' <<<"$OLD"); [ -n "$AGENT" ] || die "resume: $D never started an agent; $RETRY"
+    KIND=$(jq -r '.session.agent // .launch.kind // ""' <<<"$OLD"); SID=$(jq -r '.session.value // ""' <<<"$OLD")
+    [ -n "$SID" ] || die "resume: $D has no recorded session; $RETRY"
+    AARGS=(); while IFS= read -r X; do AARGS+=("$X"); done < <(jq -r '.launch.agent_args[]?' <<<"$OLD")
+    # The native way each kind continues a recorded session.
+    case "$KIND" in
+      claude) RARGS=("${AARGS[@]+"${AARGS[@]}"}" --resume "$SID") ;;
+      codex) RARGS=(resume "${AARGS[@]+"${AARGS[@]}"}" "$SID") ;;
+      pi) RARGS=("${AARGS[@]+"${AARGS[@]}"}" --session "$SID") ;;
+      *) die "resume: dispatch does not know how to resume a ${KIND:-unknown} session; $RETRY" ;;
+    esac
+    WT=$(jq -r '.worktree // empty' <<<"$OLD")
+    [ -n "$WT" ] && [ -d "$WT" ] || die "resume: the worktree of $D is gone (${WT:-none recorded}); $RETRY"
+    NEXT=$(jq -r --arg d "$D" '[.[] | select(.supersedes == $d and (.status == "pending" or .status == "working")) | .dispatch] | first // empty' "$LEDGER")
+    [ -z "$NEXT" ] || die "resume: $D already has a newer attempt $NEXT; resume or stop that one"
+    ! herdr agent get "$AGENT" >/dev/null 2>&1 \
+      || die "resume: agent $AGENT is still running; send it a follow-up with $0 send, or resume once it has exited"
+    check_attempts "$D" "$FORCE"
+    N=$(new_id)
+    NOTICE="$RUN_DIR/workers/$AGENT/resume-$N.md"
+    TASKREF=$(jq -r '.resume.task // .prompt_file // .launch.task // ""' <<<"$OLD")
+    RES=$(jq -cn --arg from "$D" --arg agent "$AGENT" --arg kind "$KIND" --arg sid "$SID" --arg wt "$WT" \
+      --arg pane "$(jq -r '.pane_id // ""' <<<"$OLD")" --arg notice "$NOTICE" --arg task "$TASKREF" '$ARGS.positional as $a
+      | {from: $from, agent: $agent, kind: $kind, session: $sid, worktree: $wt, pane: $pane, notice: $notice, task: $task, agent_args: $a}' \
+      --args -- "${RARGS[@]}")
+    if [ "$DRY" = 1 ]; then
+      jq -c --arg n "$(task_attempts "$D" | grep -c .)" '. + {attempts: ($n | tonumber)}' <<<"$RES"; exit 0
+    fi
+    mkdir -p "$(dirname "$NOTICE")"
+    cat >"$NOTICE" <<EOF
+# Resumed after an interruption
+
+Your run of this task was interrupted. This is the same conversation, resumed in the same worktree: $WT
+
+Your last tool call may have run in full, in part or not at all. Before you continue:
+1. Run \`git status\` and \`git log --oneline -5\` in the worktree, and compare them with what you were doing.
+2. Check whether your last command or edit finished. Finish or repair it if it did not.
+3. Read your inbox for messages you have not acked (see below).
+
+Then carry on with the task${TASKREF:+. Its full text is in $TASKREF}. Your reporting rules and inbox are the same as before.
+When you are not sure a report went out, send it again with the same --key; it is not delivered twice.
+EOF
+    NEW=$(jq -c --arg n "$N" --arg ts "$(now)" --arg kind "$KIND" --argjson res "$RES" '{dispatch: $n, attempt: (.attempt + 1),
+      supersedes: .dispatch, after: .after, status: "pending", outcome: null, decision: null, created: $ts, started: null,
+      settled: null, agent: null, launch: (.launch + {kind: $kind}), resume: $res}' <<<"$OLD")
+    ledger_mod --arg d "$D" --argjson n "$NEW" 'map(if .dispatch == $d and .status != "settled" then .status = "abandoned" else . end) + [$n]'
+    launch_dispatch "$N"
     ;;
 
   stop|abandon)

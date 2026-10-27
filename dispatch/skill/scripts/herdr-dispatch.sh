@@ -9,10 +9,14 @@ Usage: herdr-dispatch.sh --repo <path> --branch <name> --name <agent-name> --pro
                          [--base <ref>] [--kind <herdr agent kind>]
                          [--run-dir <dir> | --inbox <file>]
                          [-- <native agent args>...]
-       herdr-dispatch.sh --resume <worktree> [--pane <id>] --name <agent-name> --prompt-file <file> --kind <kind>
-                         --run-dir <dir> -- <native agent args that resume the session>...
-  --resume   start the agent again in the existing worktree under the same name, in --pane when that
-             pane is still open on the worktree with no agent. The prompt file says it was interrupted.
+       herdr-dispatch.sh --resume <worktree> --session <json> [--pane <id>] --name <agent-name> --prompt-file <file>
+                         --run-dir <dir> [-- <native agent args>...]
+       herdr-dispatch.sh --check-session <json>
+  --resume   start the agent again on its recorded session (agent_session of herdr agent get) in the
+             existing worktree under the same name, in --pane when that pane is still open on the
+             worktree with no agent. The prompt file says it was interrupted.
+  --check-session  exit 0 when Herdr can resume the session, 1 when it refuses it, 4 when this Herdr
+             cannot resume or give a launch prompt. Opens nothing.
   --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl and a per-worker inbox for replies.
              Used by dispatch.sh.
   --inbox    legacy single-mailbox mode (no worker inbox, no supervisor wake).
@@ -20,7 +24,7 @@ EOF
   exit 2
 }
 
-REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= RESUME_WT= REUSE_PANE=
+REPO= BRANCH= BASE= NAME= KIND= PROMPT_FILE= INBOX= RUN_DIR= RESUME_WT= REUSE_PANE= SESSION= CHECK=
 AGENT_ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -34,19 +38,51 @@ while [ $# -gt 0 ]; do
     --run-dir) RUN_DIR=$2; shift 2 ;;
     --resume) RESUME_WT=$2; shift 2 ;;
     --pane) REUSE_PANE=$2; shift 2 ;;
+    --session) SESSION=$2; shift 2 ;;
+    --check-session) SESSION=$2; CHECK=1; shift 2 ;;
     --) shift; AGENT_ARGS+=("$@"); break ;;
     *) usage ;;
   esac
 done
-{ [ -n "$REPO" ] && [ -n "$BRANCH" ] || [ -n "$RESUME_WT" ]; } && [ -n "$NAME" ] && [ -r "$PROMPT_FILE" ] || usage
 
 die() { echo "herdr-dispatch: $*" >&2; exit 1; }
+
+# Asks Herdr to resume <session> into a pane that cannot exist. Herdr checks the session before the
+# pane, so the answer says whether it would resume it, without starting anything.
+# Returns 0 (it would), 1 (it refuses the session) or 4 (this Herdr has no agent resume).
+check_session() {  # <session json>
+  local out
+  out=$(herdr agent resume dispatch-check --agent-session "$1" --pane dispatch:check --no-supervisor 2>&1 </dev/null || true)
+  case "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)" in
+    agent_pane_not_found|agent_name_taken) return 0 ;;
+    agent_resume_unsupported|invalid_agent_session|unsupported_agent_kind)
+      CHECK_MSG="Herdr cannot resume this session: $(jq -r .error.message <<<"$out")"; return 1 ;;
+    *) CHECK_MSG="this Herdr has no agent resume or launch prompt. Dispatch needs a Herdr build with herdr agent resume"
+       CHECK_MSG+=" and agent start --prompt-file (FORK.md, Agent launch). herdr said: $(head -c 200 <<<"${out%%$'\n'*}")"; return 4 ;;
+  esac
+}
+CHECK_MSG=
+if [ -n "$CHECK" ]; then
+  command -v herdr >/dev/null || die "herdr not on PATH"
+  rc=0; check_session "$SESSION" || rc=$?
+  [ -z "$CHECK_MSG" ] || echo "herdr-dispatch: $CHECK_MSG" >&2
+  exit "$rc"
+fi
+{ [ -n "$REPO" ] && [ -n "$BRANCH" ] || { [ -n "$RESUME_WT" ] && [ -n "$SESSION" ]; }; } && [ -n "$NAME" ] && [ -r "$PROMPT_FILE" ] || usage
+
 [ "${HERDR_ENV:-}" = "1" ] || die "not inside a Herdr pane (HERDR_ENV != 1)"
 for bin in herdr jq git; do command -v "$bin" >/dev/null || die "$bin not on PATH"; done
 HERDR_STATUS=$(herdr status 2>/dev/null) || die "herdr server not reachable (herdr status)"
 case "$HERDR_STATUS" in *"compatible: no"*)
   echo "herdr-dispatch: warning: herdr client/server protocol mismatch, see herdr status" >&2 ;;
 esac
+# A start also needs the shell wait and the launch prompt, which come with agent resume.
+if [ -n "$RESUME_WT" ]; then
+  KIND=$(jq -r '.agent // empty' <<<"$SESSION" 2>/dev/null || true)
+  check_session "$SESSION" || die "$CHECK_MSG"
+else
+  check_session '{"agent":"claude","kind":"id","value":"00000000-0000-0000-0000-000000000000"}' || [ $? = 1 ] || die "$CHECK_MSG"
+fi
 
 # A dispatch inherits the caller's own agent kind unless --kind names one: claude dispatches
 # claude, omp dispatches omp. A caller herdr does not recognize as an agent must pass --kind.
@@ -186,44 +222,25 @@ EOF
 )
 fi
 
-# Herdr types the agent command into the pane's shell and rejects multi-line arguments,
-# so the task travels as a file and the argument only points at it.
+# The task stays in a file: the first prompt only points at it, and a resume notice refers to it.
 STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dispatch/prompts"
 mkdir -p "$STATE"
 TASK_FILE="$STATE/$NAME-$(date +%Y%m%dT%H%M%S).md"
 printf '%s\n' "$PROMPT" >"$TASK_FILE"
 agent_status() { herdr agent get "$NAME" 2>/dev/null | jq -r '.result.agent.agent_status // "missing"' 2>/dev/null || echo missing; }
-# A pane whose shell is still starting drops the first characters of the command herdr types,
-# which leaves the shell running `laude ...` or `mp ...` and no agent. Make the pane prove it
-# can execute a whole command line first; a dropped character then costs only a marker retry.
-# The shell computes the marker, so a match cannot be satisfied by the echoed input line.
-warm_pane() {
-  local i
-  for i in 1 2 3 4 5; do
-    herdr pane run "$PANE" 'echo $((6*7))-herdr-ready' >/dev/null 2>&1 || true
-    herdr pane wait-output "$PANE" --match '42-herdr-ready' --timeout 5000 >/dev/null 2>&1 && return 0
-    sleep 1
-  done
-  return 1
-}
-warm_pane || echo "herdr-dispatch: warning: pane $PANE never ran a marker command; starting anyway" >&2
 
+# Herdr waits for the pane's shell before it types the command, and types the first prompt once
+# the agent is ready.
 LINE="Your task is in the file $TASK_FILE - read it now and carry it out in full."
-[ -z "$RESUME_WT" ] || LINE="You were interrupted and this session is resumed. Read the file $TASK_FILE now, before anything else, and follow it."
-for _ in 1 2 3; do
-  START=$(herdr agent start "$NAME" --kind "$KIND" --pane "$PANE" --timeout 60000 -- "${AGENT_ARGS[@]}" "$LINE" 2>&1 || true)
-  CODE=$(echo "$START" | jq -r '.error.code // empty' 2>/dev/null || echo unparsable)
-  [ -n "$CODE" ] || break
-  if [ "$CODE" = agent_pane_busy ]; then sleep 3; continue; fi
-  # A truncated command line leaves the shell reporting `command not found`. Clear it and
-  # retype rather than recording a start failure the operator would retry by hand.
-  if herdr pane read "$PANE" --source recent --lines 20 2>/dev/null | grep -q "command not found"; then
-    herdr pane send-keys "$PANE" ctrl-c >/dev/null 2>&1 || true
-    sleep 2
-    continue
-  fi
-  break
-done
+if [ -n "$RESUME_WT" ]; then
+  LINE="You were interrupted and this session is resumed. Read the file $TASK_FILE now, before anything else, and follow it."
+  START=$(printf '%s' "$LINE" | herdr agent resume "$NAME" --agent-session "$SESSION" --pane "$PANE" --timeout 60000 \
+    --prompt-file - -- "${AGENT_ARGS[@]}" 2>&1 || true)
+else
+  START=$(printf '%s' "$LINE" | herdr agent start "$NAME" --kind "$KIND" --pane "$PANE" --timeout 60000 \
+    --prompt-file - -- "${AGENT_ARGS[@]}" 2>&1 || true)
+fi
+CODE=$(echo "$START" | jq -r '.error.code // empty' 2>/dev/null || echo unparsable)
 # Agents that register through lifecycle hooks (omp) can be detected in the pane while
 # `agent start` still times out waiting for its own detection path and never binds the name.
 # The pane is the source of truth: if an agent is there, bind the name and carry on.
@@ -232,8 +249,16 @@ bind_name() {
   [ "$(herdr agent get "$NAME" 2>/dev/null | jq -r '.result.agent.pane_id // empty')" = "$PANE" ] && return 0
   herdr agent rename "$PANE" "$NAME" >/dev/null 2>&1
 }
+# Herdr drops the launch prompt of a start that failed, so the found agent gets the line here.
+launch_prompt_queued() {
+  herdr agent deliveries "$PANE" 2>/dev/null | jq -e '[.result.deliveries[]? | select(.source == "herdr:launch")] | length > 0' >/dev/null 2>&1
+}
 if [ -n "$CODE" ] && [ "$CODE" != "agent_not_ready" ]; then
-  if [ -n "$(pane_agent)" ] && bind_name; then CODE=; fi
+  if [ -n "$(pane_agent)" ] && bind_name; then
+    CODE=
+    launch_prompt_queued || herdr agent deliver "$NAME" "$LINE" --source dispatch >/dev/null 2>&1 \
+      || echo "herdr-dispatch: warning: $NAME is running but its first prompt was not delivered" >&2
+  fi
 fi
 # `agent_not_ready` means herdr started the agent but it has not reached idle, usually a
 # startup approval or trust dialog. The name stays bound and readable, so report the live

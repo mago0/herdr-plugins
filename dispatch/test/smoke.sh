@@ -152,9 +152,31 @@ release_with_parent taken '.opened_for_worktrees = true | .pane_count = 2'
 # Settlement is safe to re-run. For a fake workspace (fk-*) the shim makes `herdr worktree remove`
 # kill the command that called it (a crash between settle and release), fail as dirty, or remove.
 WR="$XDG_STATE_HOME/wt-remove" WTS="$XDG_STATE_HOME/wt"
+# Herdr's agent start and agent resume, as a server with them (mode new) or without (mode old) answers.
+# Each call goes to launch-calls and its first prompt (stdin) to launch-prompt.
+FL="$XDG_STATE_HOME/fake-launch"; echo new >"$XDG_STATE_HOME/herdr-mode"
+cat >"$FL" <<EOF
+#!/usr/bin/env bash
+echo "\$*" >>"$XDG_STATE_HOME/launch-calls"
+if [ "\$(cat "$XDG_STATE_HOME/herdr-mode")" = old ]; then
+  [ "\$2" = start ] && echo "unknown option: --prompt-file" || echo "herdr agent commands:"; exit 2
+fi
+pane= session=
+while [ \$# -gt 0 ]; do case "\$1" in --pane) pane=\$2; shift 2 ;; --agent-session) session=\$2; shift 2 ;; --) break ;; *) shift ;; esac; done
+if [ -n "\$session" ]; then
+  case "\$(jq -r .agent <<<"\$session")" in
+    claude|codex|pi|omp) ;;
+    *) echo '{"error":{"code":"agent_resume_unsupported","message":"herdr has no resume command for gemini sessions"}}'; exit 1 ;;
+  esac
+fi
+[ "\$pane" != dispatch:check ] || { echo '{"error":{"code":"agent_pane_not_found","message":"no pane"}}'; exit 1; }
+cat >"$XDG_STATE_HOME/launch-prompt"; echo '{"result":{}}'
+EOF
+chmod +x "$FL"
 cat >"$XDG_STATE_HOME/bin/herdr" <<EOF
 #!/usr/bin/env bash
 if [ "\$1 \$2" = "agent get" ] && [ -f "$FA/\$3" ]; then cat "$FA/\$3"; exit 0; fi
+case "\$1 \$2" in "agent resume"|"agent start") exec "$FL" "\$@" ;; esac
 if [ "\$1 \$2 \$3" = "worktree remove --workspace" ] && [ "\${4#fk-}" != "\$4" ]; then
   case "\$(cat "$WR")" in
     crash) kill -KILL -- -"\$(ps -o pgid= -p \$\$ | tr -d ' ')" ;;
@@ -260,8 +282,8 @@ DISPATCH_MAX_ATTEMPTS=1 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 &
 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 || true
 "$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_q1")] | length == 1' >/dev/null || fail "an entry with no supersedes field was not retried"
 
-# Resume continues an attempt's own session in its worktree. --dry-run shows the native resume args
-# per kind; the launcher is not run, so nothing opens in Herdr.
+# Resume continues an attempt's own session in its worktree, with Herdr's resume command for the
+# session's kind. --dry-run asks Herdr whether it takes the session and opens nothing.
 SID=11111111-2222-3333-4444-555555555555
 resumable() {  # <dispatch> <agent> <session agent> <session value> [extra json]
   local x=${5:-}; [ -n "$x" ] || x="{}"
@@ -275,12 +297,17 @@ plan() { dsp resume --run smoke --dispatch "$1" --dry-run; }
 resumable d_rc rc claude "$SID"
 resumable d_rx rx codex "$SID"
 resumable d_rp rp pi "$PT"
-plan d_rc | jq -e --arg s "$SID" --arg wt "$WTS/rc" '.agent_args == ["--model", "m", "--resume", $s] and .kind == "claude"
+resumable d_ro ro omp "$PT"
+: >"$XDG_STATE_HOME/launch-calls"
+plan d_rc | jq -e --arg s "$SID" --arg wt "$WTS/rc" '.agent_args == ["--model", "m"] and .session.value == $s and .kind == "claude"
   and .agent == "rc" and .worktree == $wt and .pane == "fk:none" and .task == "/prompts/first.md" and .attempts == 1' >/dev/null || fail "claude resume plan: $(plan d_rc)"
-plan d_rx | jq -e --arg s "$SID" '.agent_args == ["resume", "--model", "m", $s]' >/dev/null || fail "codex resume plan: $(plan d_rx)"
-plan d_rp | jq -e --arg s "$PT" '.agent_args == ["--model", "m", "--session", $s]' >/dev/null || fail "pi resume plan: $(plan d_rp)"
+for k in rx:codex rp:pi ro:omp; do
+  plan "d_${k%%:*}" | jq -e --arg k "${k#*:}" '.kind == $k and .session.agent == $k and .agent_args == ["--model", "m"]' >/dev/null || fail "${k#*:} resume plan: $(plan "d_${k%%:*}")"
+done
+grep -q -- "--pane dispatch:check" "$XDG_STATE_HOME/launch-calls" || fail "--dry-run did not ask Herdr"
+grep -v -- "--pane dispatch:check" "$XDG_STATE_HOME/launch-calls" | grep -q . && fail "--dry-run started an agent"
 "$D" list --run smoke | jq -e '[.[] | select(.resume != null)] | length == 0' >/dev/null || fail "--dry-run wrote the ledger"
-"$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_rc") | .attention == "exited" and (.next | test("resume --dispatch d_rc"))' >/dev/null || fail "ps does not offer resume"
+"$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_ro") | .attention == "exited" and (.next | test("resume --dispatch d_ro"))' >/dev/null || fail "ps does not offer resume"
 
 # Refusals, each pointing at retry where retry is the way on.
 refuses() {  # <dispatch> <pattern>
@@ -289,8 +316,8 @@ refuses() {  # <dispatch> <pattern>
   grep -q -- "$2" <<<"$out" || fail "resume of $1: $out"
   "$D" list --run smoke | jq -e --arg d "$1" --argjson n "$n" '[.[] | select(.supersedes == $d)] | length == $n' >/dev/null || fail "a refused resume of $1 wrote an attempt"
 }
-resumable d_ro ro omp /s.jsonl
-refuses d_ro "does not know how to resume a omp session; start the task again from its prompt instead: .*retry --dispatch d_ro"
+resumable d_rm rm gemini "$SID"
+refuses d_rm "Herdr cannot resume this session: herdr has no resume command for gemini sessions; start the task again from its prompt instead: .*retry --dispatch d_rm"
 resumable d_rn rn claude ""
 refuses d_rn "has no recorded session; .*retry --dispatch d_rn"
 resumable d_rg rg claude "$SID"; rmdir "$WTS/rg"
@@ -303,16 +330,62 @@ dsp resume --run smoke --dispatch d_r6 --force --dry-run | jq -e '.attempts > 5'
 resumable d_rs rs claude "$SID"
 jq '. + [{dispatch: "d_rs2", attempt: 2, supersedes: "d_rs", status: "working", agent: "rs", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
 refuses d_rs "already has a newer attempt d_rs2"
+# A Herdr without agent resume: the refusal names what Herdr needs and does not offer retry.
+echo old >"$XDG_STATE_HOME/herdr-mode"
+refuses d_rx "Dispatch needs a Herdr build with herdr agent resume"
+dsp resume --run smoke --dispatch d_rx 2>&1 | grep -q "retry --dispatch" && fail "an old Herdr refusal offered retry"
+echo new >"$XDG_STATE_HOME/herdr-mode"
 
 # A real resume writes a linked attempt and the notice, then the launcher stops before Herdr
 # (no HERDR_ENV), so the attempt is failed_start.
 HERDR_ENV= dsp resume --run smoke --dispatch d_rc >/dev/null 2>&1 || true
 "$D" list --run smoke | jq -e --arg s "$SID" '(.[] | select(.dispatch == "d_rc") | .status == "abandoned")
   and ([.[] | select(.supersedes == "d_rc")] | length == 1 and (.[0] | .attempt == 2 and .resume.from == "d_rc"
-       and .resume.session == $s and .launch.kind == "claude" and .status == "failed_start"))' >/dev/null || fail "resume ledger: $("$D" list --run smoke | jq -c '.[] | select(.supersedes == "d_rc")')"
+       and .resume.session.value == $s and .launch.kind == "claude" and .status == "failed_start"))' >/dev/null || fail "resume ledger: $("$D" list --run smoke | jq -c '.[] | select(.supersedes == "d_rc")')"
 NOTE=$("$D" list --run smoke | jq -r '.[] | select(.supersedes == "d_rc") | .resume.notice')
 grep -q 'git status' "$NOTE" && grep -qF "$WTS/rc" "$NOTE" && grep -q "/prompts/first.md" "$NOTE" || fail "resume notice: $(cat "$NOTE")"
-rc=0; HERDR_ENV= "$(dirname "$D")/herdr-dispatch.sh" --resume "$WTS/rc" --name rc --prompt-file "$NOTE" --kind claude --run-dir "$ST/runs/smoke" 2>/dev/null || rc=$?
+rc=0; HERDR_ENV= "$(dirname "$D")/herdr-dispatch.sh" --resume "$WTS/rc" --session "{\"agent\":\"claude\",\"kind\":\"id\",\"value\":\"$SID\"}" \
+  --name rc --prompt-file "$NOTE" --run-dir "$ST/runs/smoke" 2>/dev/null || rc=$?
 [ "$rc" = 1 ] || fail "the launcher did not take --resume in place of --repo and --branch (exit $rc)"
+
+# The launcher against a Herdr shim: start and resume hand Herdr the first prompt on stdin and type
+# nothing themselves, and a Herdr without agent resume is refused before a worktree opens.
+LS="$XDG_STATE_HOME/launch-shim" LR="$XDG_STATE_HOME/launch-repo"; mkdir -p "$LS/bin"
+git init -q "$LR"; git -C "$LR" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$LR" worktree add -q "$LR/_worktrees/lw" -b lw
+cat >"$LS/bin/herdr" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "agent resume"|"agent start") exec "$FL" "\$@" ;;
+  "status "*) echo "server: running" ;;
+  "agent list") echo '{"result":{"agents":[]}}' ;;
+  "agent get") echo '{"result":{"agent":{"name":"lw","pane_id":"lp:1","agent_status":"idle"}}}' ;;
+  "workspace list") echo '{"result":{"workspaces":[]}}' ;;
+  "worktree open"|"worktree create") echo "\$*" >>"$LS/opened"; echo '{"result":{"root_pane":{"pane_id":"lp:1"},"workspace":{"workspace_id":"lw"}}}' ;;
+  "pane run") echo "\$*" >>"$LS/typed"; echo '{"result":{}}' ;;
+  *) echo '{"result":{}}' ;;
+esac
+EOF
+chmod +x "$LS/bin/herdr"
+T=$(mktemp); echo "the task" >"$T"
+launch() { HERDR_ENV=1 PATH="$LS/bin:$PATH" "$(dirname "$D")/herdr-dispatch.sh" "$@"; }
+: >"$XDG_STATE_HOME/launch-calls"
+OUT=$(launch --repo "$LR" --branch lw2 --name lw --kind claude --prompt-file "$T" --run-dir "$ST/runs/smoke" -- --model m 2>&1) || fail "start: $OUT"
+jq -e '.status == "idle" and .kind == "claude"' <<<"$OUT" >/dev/null || fail "start receipt: $OUT"
+grep -qx "agent start lw --kind claude --pane lp:1 --timeout 60000 --prompt-file - -- --model m" "$XDG_STATE_HOME/launch-calls" || fail "start call: $(cat "$XDG_STATE_HOME/launch-calls")"
+TF=$(jq -r .task_file <<<"$OUT")
+[ "$(cat "$XDG_STATE_HOME/launch-prompt")" = "Your task is in the file $TF - read it now and carry it out in full." ] || fail "start prompt: $(cat "$XDG_STATE_HOME/launch-prompt")"
+grep -q "the task" "$TF" && grep -q "Reporting to your supervisor" "$TF" || fail "task file: $(cat "$TF")"
+[ ! -e "$LS/typed" ] || fail "the launcher typed into the pane: $(cat "$LS/typed")"
+S="{\"agent\":\"omp\",\"kind\":\"path\",\"value\":\"$PT\"}"
+OUT=$(launch --resume "$LR/_worktrees/lw" --session "$S" --name lw --prompt-file "$T" --run-dir "$ST/runs/smoke" -- --model m 2>&1) || fail "resume: $OUT"
+jq -e '.status == "idle" and .kind == "omp"' <<<"$OUT" >/dev/null || fail "resume receipt: $OUT"
+grep -qxF "agent resume lw --agent-session $S --pane lp:1 --timeout 60000 --prompt-file - -- --model m" "$XDG_STATE_HOME/launch-calls" || fail "resume call: $(cat "$XDG_STATE_HOME/launch-calls")"
+grep -q "^You were interrupted and this session is resumed. Read the file $(jq -r .task_file <<<"$OUT") now" "$XDG_STATE_HOME/launch-prompt" || fail "resume prompt: $(cat "$XDG_STATE_HOME/launch-prompt")"
+echo old >"$XDG_STATE_HOME/herdr-mode"; rm -f "$LS/opened"
+OUT=$(launch --repo "$LR" --branch lw3 --name lw --kind claude --prompt-file "$T" --run-dir "$ST/runs/smoke" 2>&1) && fail "start on an old Herdr: $OUT"
+grep -q "Dispatch needs a Herdr build with herdr agent resume" <<<"$OUT" || fail "old Herdr message: $OUT"
+[ ! -e "$LS/opened" ] || fail "a worktree opened on an old Herdr"
+echo new >"$XDG_STATE_HOME/herdr-mode"; rm -f "$T"
 
 echo "smoke ok"

@@ -20,7 +20,7 @@
 #   dispatch.sh retry   --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
 #                       retry and resume refuse once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
 #   dispatch.sh resume  --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
-#                       worktree (claude, codex, pi with a recorded session); --dry-run prints the plan and writes nothing
+#                       worktree, for every kind Herdr can resume; --dry-run prints the plan and writes nothing
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
@@ -168,8 +168,8 @@ launch_dispatch() {
   res=$(entry "$D" | jq -c '.resume // empty')
   local args=() aargs=() x
   if [ -n "$res" ]; then
-    args=(--resume "$(jq -r .worktree <<<"$res")" --name "$(jq -r .agent <<<"$res")" \
-          --prompt-file "$(jq -r .notice <<<"$res")" --run-dir "$RUN_DIR" --kind "$(jq -r .kind <<<"$res")")
+    args=(--resume "$(jq -r .worktree <<<"$res")" --session "$(jq -c .session <<<"$res")" --name "$(jq -r .agent <<<"$res")" \
+          --prompt-file "$(jq -r .notice <<<"$res")" --run-dir "$RUN_DIR")
     x=$(jq -r '.pane // ""' <<<"$res"); [ -z "$x" ] || args+=(--pane "$x")
     while IFS= read -r x; do aargs+=("$x"); done < <(jq -r '.agent_args[]' <<<"$res")
   else
@@ -527,7 +527,7 @@ case "$CMD" in
          elif $att == "question" then "\($mail) reply --id \($mid) --body ..."
          elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
          elif $att == "stalled" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
-         elif $att == "exited" and ($e.session.value != null) and (["claude", "codex", "pi"] | index($e.session.agent) != null)
+         elif $att == "exited" and ($e.session.value // "") != ""
            then "inspect; \($mail) resume --dispatch \($e.dispatch), retry or abandon"
          elif $att == "exited" then "inspect; \($mail) retry --dispatch \($e.dispatch) or abandon"
          elif $att == "failed_start" then "\($mail) show --dispatch \($e.dispatch); \($mail) retry --dispatch \($e.dispatch)"
@@ -570,16 +570,9 @@ case "$CMD" in
     OLD=$(entry "$D"); [ -n "$OLD" ] || die "no dispatch $D in run $RUN"
     RETRY="start the task again from its prompt instead: $0 retry --dispatch $D"
     AGENT=$(jq -r '.agent // empty' <<<"$OLD"); [ -n "$AGENT" ] || die "resume: $D never started an agent; $RETRY"
-    KIND=$(jq -r '.session.agent // .launch.kind // ""' <<<"$OLD"); SID=$(jq -r '.session.value // ""' <<<"$OLD")
-    [ -n "$SID" ] || die "resume: $D has no recorded session; $RETRY"
-    AARGS=(); while IFS= read -r X; do AARGS+=("$X"); done < <(jq -r '.launch.agent_args[]?' <<<"$OLD")
-    # The native way each kind continues a recorded session.
-    case "$KIND" in
-      claude) RARGS=("${AARGS[@]+"${AARGS[@]}"}" --resume "$SID") ;;
-      codex) RARGS=(resume "${AARGS[@]+"${AARGS[@]}"}" "$SID") ;;
-      pi) RARGS=("${AARGS[@]+"${AARGS[@]}"}" --session "$SID") ;;
-      *) die "resume: dispatch does not know how to resume a ${KIND:-unknown} session; $RETRY" ;;
-    esac
+    SESSION=$(jq -c '.session // empty | select(.value != null and .value != "")' <<<"$OLD")
+    [ -n "$SESSION" ] || die "resume: $D has no recorded session; $RETRY"
+    KIND=$(jq -r .agent <<<"$SESSION")
     WT=$(jq -r '.worktree // empty' <<<"$OLD")
     [ -n "$WT" ] && [ -d "$WT" ] || die "resume: the worktree of $D is gone (${WT:-none recorded}); $RETRY"
     NEXT=$(jq -r --arg d "$D" '[.[] | select(.supersedes == $d and (.status == "pending" or .status == "working")) | .dispatch] | first // empty' "$LEDGER")
@@ -587,13 +580,16 @@ case "$CMD" in
     ! herdr agent get "$AGENT" >/dev/null 2>&1 \
       || die "resume: agent $AGENT is still running; send it a follow-up with $0 send, or resume once it has exited"
     check_attempts "$D" "$FORCE"
+    rc=0; ERR=$("$HERE/herdr-dispatch.sh" --check-session "$SESSION" 2>&1) || rc=$?
+    ERR=${ERR#herdr-dispatch: }
+    case "$rc" in 0) ;; 1) die "resume: $ERR; $RETRY" ;; *) die "resume: $ERR" ;; esac
     N=$(new_id)
     NOTICE="$RUN_DIR/workers/$AGENT/resume-$N.md"
     TASKREF=$(jq -r '.resume.task // .prompt_file // .launch.task // ""' <<<"$OLD")
-    RES=$(jq -cn --arg from "$D" --arg agent "$AGENT" --arg kind "$KIND" --arg sid "$SID" --arg wt "$WT" \
-      --arg pane "$(jq -r '.pane_id // ""' <<<"$OLD")" --arg notice "$NOTICE" --arg task "$TASKREF" '$ARGS.positional as $a
-      | {from: $from, agent: $agent, kind: $kind, session: $sid, worktree: $wt, pane: $pane, notice: $notice, task: $task, agent_args: $a}' \
-      --args -- "${RARGS[@]}")
+    RES=$(jq -cn --arg from "$D" --arg agent "$AGENT" --arg kind "$KIND" --argjson session "$SESSION" --arg wt "$WT" \
+      --arg pane "$(jq -r '.pane_id // ""' <<<"$OLD")" --arg notice "$NOTICE" --arg task "$TASKREF" \
+      --argjson a "$(jq -c '.launch.agent_args // []' <<<"$OLD")" \
+      '{from: $from, agent: $agent, kind: $kind, session: $session, worktree: $wt, pane: $pane, notice: $notice, task: $task, agent_args: $a}')
     if [ "$DRY" = 1 ]; then
       jq -c --arg n "$(task_attempts "$D" | grep -c .)" '. + {attempts: ($n | tonumber)}' <<<"$RES"; exit 0
     fi

@@ -17,7 +17,8 @@
 #   dispatch.sh reply   --id <question> (--body <text> | --body-file <f>)   answer into the worker's inbox
 #   dispatch.sh send    --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
 #   dispatch.sh ps      [--json]                                 fleet: status, liveness, attention, next action
-#   dispatch.sh retry   --dispatch <d>                           new attempt of the same task; old attempt abandoned
+#   dispatch.sh retry   --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
+#                       refused once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
@@ -75,6 +76,21 @@ ledger_mod() {
   ) 9>"$LEDGER.lock"
 }
 entry() { jq -c --arg d "$1" '.[] | select(.dispatch == $d)' "$LEDGER"; }
+
+# The attempts of a task, oldest first: every entry whose supersedes chain leads to the same first attempt.
+MAX_ATTEMPTS=${DISPATCH_MAX_ATTEMPTS:-5}
+task_attempts() {  # <dispatch>
+  jq -r --arg d "$1" '(map({key: .dispatch, value: .supersedes}) | from_entries) as $up
+    | def first_attempt: if ($up[.] // null) == null then . else $up[.] | first_attempt end;
+    ($d | first_attempt) as $f | .[] | select(.dispatch | first_attempt == $f) | .dispatch' "$LEDGER"
+}
+# Refuse a new attempt of a task that has run the limit, unless forced.
+check_attempts() {  # <dispatch> <force 0|1>
+  local ids n
+  ids=$(task_attempts "$1"); n=$(grep -c . <<<"$ids")
+  [ "$2" = 1 ] || [ "$n" -lt "$MAX_ATTEMPTS" ] \
+    || die "this task has run $n attempts ($(paste -sd' ' <<<"$ids")); the limit is $MAX_ATTEMPTS. Pass --force to start another"
+}
 
 # Dependencies of a dispatch are met when every `after` is settled with outcome succeeded.
 deps_met() {
@@ -519,8 +535,9 @@ case "$CMD" in
 
   retry)
     bind_run
-    D=; while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; *) die "retry: unknown option $1" ;; esac; done
+    D= FORCE=0; while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; --force) FORCE=1; shift ;; *) die "retry: unknown option $1" ;; esac; done
     OLD=$(entry "$D"); [ -n "$OLD" ] || die "no dispatch $D in run $RUN"
+    check_attempts "$D" "$FORCE"
     N=$(new_id)
     NEW=$(jq -c --arg n "$N" --arg ts "$(now)" '{dispatch: $n, attempt: (.attempt + 1), supersedes: .dispatch, after: .after,
       status: "pending", outcome: null, decision: null, created: $ts, started: null, settled: null, agent: null, launch: .launch}' <<<"$OLD")

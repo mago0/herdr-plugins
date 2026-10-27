@@ -215,4 +215,17 @@ U1=$("$D" report --run smoke --from nokey --type question --subject "go on?" | j
 echo '{"id":"msg_old","ts":"2026-01-01T00:00:00Z","from":"keyed","type":"status","subject":"old","body":""}' >>"$INB"
 "$D" report --run smoke --from keyed --type status --key old --subject old | jq -e '.sent != "msg_old"' >/dev/null || fail "a message with no key matched a key"
 
+# A task runs at most 5 attempts, counted through the supersedes chain, unless forced.
+jq '. + [range(1; 6) as $i | {dispatch: "d_r\($i)", attempt: $i, supersedes: (if $i == 1 then null else "d_r\($i - 1)" end),
+         status: "failed_start", agent: null, after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+OUT=$("$D" retry --run smoke --dispatch d_r5 2>&1) && fail "a sixth attempt was started"
+grep -q "has run 5 attempts (d_r1 d_r2 d_r3 d_r4 d_r5); the limit is 5. Pass --force" <<<"$OUT" || fail "cap message: $OUT"
+"$D" retry --run smoke --dispatch d_r2 >/dev/null 2>&1 && fail "a retry of an earlier attempt escaped the cap"
+"$D" retry --run smoke --dispatch d_r5 --force >/dev/null 2>&1 || true
+"$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_r5")] | length == 1' >/dev/null || fail "--force did not start an attempt"
+jq '. + [{dispatch: "d_q1", attempt: 1, status: "failed_start", agent: null, after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+DISPATCH_MAX_ATTEMPTS=1 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 && fail "the limit is not read from DISPATCH_MAX_ATTEMPTS"
+"$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 || true
+"$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_q1")] | length == 1' >/dev/null || fail "an entry with no supersedes field was not retried"
+
 echo "smoke ok"

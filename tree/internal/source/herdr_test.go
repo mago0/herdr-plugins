@@ -197,11 +197,12 @@ func TestSnapshotNamesTheRepoOfAWorkspaceHerdrGivesNoWorktree(t *testing.T) {
 	}
 }
 
-func TestSnapshotMarksADispatchParent(t *testing.T) {
+func TestSnapshotMarksAWorkspaceOpenedForWorktrees(t *testing.T) {
 	s := serve(t, map[string]string{
 		"workspace.list": `{"id":"tree","result":{"workspaces":[
-			{"workspace_id":"w1","label":"puppet","number":1,"tokens":{"dispatch_parent":"1"}},
-			{"workspace_id":"w2","label":"notes","number":2,"tokens":null}]}}`,
+			{"workspace_id":"w1","label":"puppet","number":1,"opened_for_worktrees":true},
+			{"workspace_id":"w2","label":"notes","number":2},
+			{"workspace_id":"w3","label":"infra","number":3,"tokens":{"dispatch_parent":"1"}}]}}`,
 		"tab.list":   `{"id":"tree","result":{"tabs":[]}}`,
 		"agent.list": `{"id":"tree","result":{"agents":[]}}`,
 		"pane.list":  `{"id":"tree","result":{"panes":[]}}`,
@@ -210,8 +211,12 @@ func TestSnapshotMarksADispatchParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !got.Workspaces[0].DispatchParent || got.Workspaces[1].DispatchParent {
-		t.Fatalf("dispatch parents = %v, %v", got.Workspaces[0].DispatchParent, got.Workspaces[1].DispatchParent)
+	var marks []bool
+	for _, w := range got.Workspaces {
+		marks = append(marks, w.OpenedForWorktrees)
+	}
+	if !marks[0] || marks[1] || marks[2] {
+		t.Fatalf("opened for worktrees = %v, want only w1", marks)
 	}
 }
 

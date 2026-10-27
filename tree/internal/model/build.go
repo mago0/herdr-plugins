@@ -127,7 +127,7 @@ func Build(s Snapshot) Tree {
 			first.Children = append(append([]*Node(nil), shells[w.ID]...), first.Children...)
 			continue
 		}
-		if len(own) == 0 && w.DispatchParent && linked[w.Repo] && !named[w.ID] && idle(shells[w.ID], w.Repo) {
+		if len(own) == 0 && w.OpenedForWorktrees && linked[w.Repo] && !named[w.ID] && idle(shells[w.ID], w.Repo) {
 			continue
 		}
 		e := &Node{
@@ -144,7 +144,7 @@ func Build(s Snapshot) Tree {
 }
 
 // idle is true when every shell sits at the root of repo with no command: the shell Herdr opens
-// with a dispatch parent, which the worker rows of that repo already stand for.
+// with a worktree parent, which the worker rows of that repo already stand for.
 func idle(shells []*Node, repo string) bool {
 	for _, p := range shells {
 		if p.Where != repo || p.Command != "" {

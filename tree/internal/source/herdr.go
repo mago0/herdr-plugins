@@ -70,11 +70,11 @@ func (s Socket) Call(method string, params, result any) error {
 func Snapshot(c Caller) (model.Snapshot, error) {
 	var ws struct {
 		Workspaces []struct {
-			ID       string             `json:"workspace_id"`
-			Label    string             `json:"label"`
-			Number   int                `json:"number"`
-			Status   string             `json:"agent_status"`
-			Tokens   map[string]*string `json:"tokens"`
+			ID       string `json:"workspace_id"`
+			Label    string `json:"label"`
+			Number   int    `json:"number"`
+			Status   string `json:"agent_status"`
+			Opened   bool   `json:"opened_for_worktrees"`
 			Worktree *struct {
 				Repo     string `json:"repo_name"`
 				Root     string `json:"repo_root"`
@@ -167,10 +167,7 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		}
 	}
 	for _, w := range ws.Workspaces {
-		m := model.Workspace{ID: w.ID, Label: w.Label, Number: w.Number, Status: w.Status}
-		if v := w.Tokens["dispatch_parent"]; v != nil && *v == "1" {
-			m.DispatchParent = true
-		}
+		m := model.Workspace{ID: w.ID, Label: w.Label, Number: w.Number, Status: w.Status, OpenedForWorktrees: w.Opened}
 		if w.Worktree != nil {
 			m.Repo = w.Worktree.Repo
 			m.Where, m.Worktree = where(w.Worktree.Root, w.Worktree.Checkout, w.Worktree.Linked, home), w.Worktree.Linked

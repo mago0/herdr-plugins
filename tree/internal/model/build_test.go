@@ -266,9 +266,9 @@ e ops
 `)
 }
 
-func TestBuildADispatchParentWithOnlyItsRootShellIsNoEffort(t *testing.T) {
+func TestBuildAWorktreeParentWithOnlyItsRootShellIsNoEffort(t *testing.T) {
 	parent := ws("w2", "puppet", "puppet", 2)
-	parent.DispatchParent = true
+	parent.OpenedForWorktrees = true
 	review := ws("w3", "review-puppet-679", "puppet", 3)
 	review.Worktree = true
 	s := under(Snapshot{
@@ -283,7 +283,7 @@ e Main
 `)
 }
 
-func TestBuildADispatchParentInUseIsAnEffort(t *testing.T) {
+func TestBuildAWorktreeParentInUseIsAnEffort(t *testing.T) {
 	for name, edit := range map[string]func(*Snapshot){
 		"no worktree left":  func(s *Snapshot) { s.Workspaces = s.Workspaces[:1] },
 		"a named shell":     func(s *Snapshot) { s.Shells[0].Label = "deploy" },
@@ -292,7 +292,7 @@ func TestBuildADispatchParentInUseIsAnEffort(t *testing.T) {
 		"an agent":          func(s *Snapshot) { s.Agents = []Agent{ag("w2:p2", "lead")} },
 	} {
 		parent := ws("w2", "puppet", "puppet", 2)
-		parent.DispatchParent = true
+		parent.OpenedForWorktrees = true
 		review := ws("w3", "review", "puppet", 3)
 		review.Worktree = true
 		s := Snapshot{Workspaces: []Workspace{parent, review}, Shells: []Shell{sh("w2:p1", "", "puppet")}}

@@ -41,5 +41,5 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label --
 ## Rules
 
 - Set them only on your own pane, `$HERDR_PANE_ID`, and put the pane id first, before the options. A label on another agent's pane is the user's to set, from the row's right-click menu.
-- Keep `--source tree`. The menu clears and replaces the label under that source.
+- The source names only the writer. A pane has one `label` and one `link`, and the last write wins, also over the row's menu.
 - Do not report this to the user as a step. It is bookkeeping.

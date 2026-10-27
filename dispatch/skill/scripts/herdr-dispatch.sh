@@ -118,13 +118,15 @@ if [ -n "$RUN_DIR" ]; then
 
 You are dispatched agent \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
 
-    $DISPATCH report --run $(basename "$RUN_DIR") --from $NAME --type <type> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
+    $DISPATCH report --run $(basename "$RUN_DIR") --from $NAME --type <type> --key <key> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
 
 Types:
 - \`status\` - progress or a result; you keep working.
 - \`question\` - you need an answer. See "Your inbox" below for how the reply arrives.
 - \`escalation\` - blocked, a human is needed.
-- \`worker_done\` - task complete or abandoned. Send exactly once, with \`--outcome succeeded\` or \`--outcome failed\` (never encode failure only in prose), and a three-sentence summary in --body-file. After sending it, stop and idle; do not start new work.
+- \`worker_done\` - task complete or abandoned. Send exactly once, with \`--key done\`, \`--outcome succeeded\` or \`--outcome failed\` (never encode failure only in prose), and a three-sentence summary in --body-file. After sending it, stop and idle; do not start new work. A \`worker_done\` that ends the work of a follow-up takes \`--key done-<follow-up id>\`.
+
+\`--key\` names one report: a short slug of what it says, such as \`tests-pass\` or \`pr-opened\`. A report with a key you already used is not sent again and prints the first message id. So when you are not sure a report went out, send it again with the same key; give each new report a new key.
 
 Put long bodies in a file and pass --body-file. Do not use any other callback channel.
 

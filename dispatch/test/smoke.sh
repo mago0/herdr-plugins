@@ -185,4 +185,34 @@ STOPPED_AT=$("$D" show --run smoke --dispatch d_stop | jq -r .settled)
 echo ok >"$WR"; dsp stop --run smoke --dispatch d_stop >/dev/null || fail "re-run of stop"
 "$D" show --run smoke --dispatch d_stop | jq -e --arg s "$STOPPED_AT" '.released != null and .settled == $s' >/dev/null || fail "re-run of stop did not release"
 
+# A report is sent once per key. A repeat returns the first id, appends nothing and wakes no one.
+INB="$ST/runs/smoke/inbox.jsonl"
+K1=$("$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+N=$(wc -l <"$INB")
+OUT=$("$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject "done, again" 2>&1)
+jq -e --arg i "$K1" '.sent == $i and .duplicate == true' <<<"$(head -1 <<<"$OUT")" >/dev/null || fail "a repeated key was sent again: $OUT"
+grep -q "not woken" <<<"$OUT" && fail "a repeat tried to wake the supervisor"
+[ "$(wc -l <"$INB")" = "$N" ] || fail "a repeat was appended"
+"$D" ack --run smoke --id "$K1" --decision release >/dev/null 2>&1
+"$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent == $i' >/dev/null || fail "a key repeated after the ack was sent again"
+"$D" report --run smoke --from keyed --type worker_done --key done-msg_1 --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent != $i and .duplicate == null' >/dev/null || fail "a new key was not sent"
+"$D" report --run smoke --from other --type status --key done --subject s 2>/dev/null | jq -e --arg i "$K1" '.sent != $i' >/dev/null || fail "a key of another agent counted"
+# A later attempt of the agent may use a key again once the first message with it is acked.
+"$D" report --run smoke --from keyed2 --type worker_done --key done --outcome succeeded --subject done >/dev/null 2>&1
+jq '. + [{dispatch: "d_k2", attempt: 2, status: "working", agent: "keyed2", created: "2999-01-01T00:00:00Z", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+K2=$("$D" report --run smoke --from keyed2 --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+"$D" report --run smoke --from keyed2 --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K2" '.sent == $i' >/dev/null || fail "an un-acked key from an earlier attempt was sent again"
+"$D" ack --run smoke --id "$K2" --decision release >/dev/null 2>&1
+"$D" report --run smoke --from keyed2 --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K2" '.sent != $i' >/dev/null || fail "an acked key from an earlier attempt blocked this attempt's report"
+
+# With no key, the same content is a repeat while the first is un-acked, and new after its ack.
+U1=$("$D" report --run smoke --from nokey --type question --subject "go on?" | jq -r .sent)
+"$D" report --run smoke --from nokey --type question --subject "go on?" | jq -e --arg i "$U1" '.sent == $i and .duplicate' >/dev/null || fail "an un-acked repeat with no key was sent again"
+"$D" report --run smoke --from nokey --type question --subject "go on, now?" | jq -e --arg i "$U1" '.sent != $i' >/dev/null || fail "other content counted as a repeat"
+"$D" ack --run smoke --id "$U1" >/dev/null
+"$D" report --run smoke --from nokey --type question --subject "go on?" | jq -e --arg i "$U1" '.sent != $i' >/dev/null || fail "a question asked again after its answer was dropped"
+# Messages from before keys existed have no key and still read.
+echo '{"id":"msg_old","ts":"2026-01-01T00:00:00Z","from":"keyed","type":"status","subject":"old","body":""}' >>"$INB"
+"$D" report --run smoke --from keyed --type status --key old --subject old | jq -e '.sent != "msg_old"' >/dev/null || fail "a message with no key matched a key"
+
 echo "smoke ok"

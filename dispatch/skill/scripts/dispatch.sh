@@ -21,8 +21,10 @@
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
-#   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
-#                       worker side: mail the supervisor, and wake it for the run's wake types
+#   dispatch.sh report  --from <agent> --type <t> --subject <s> [--key <k>] [--body <text> | --body-file <f>] [--outcome <o>]
+#                       worker side: mail the supervisor, and wake it for the run's wake types. A repeat is not sent
+#                       again and returns the first id: the same --key still un-acked or sent in the agent's current
+#                       attempt, or with no key the same content still un-acked
 #   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
 #                       type one line into the supervisor (or --to) from any process; exit 3 = no such agent
 #   dispatch.sh adopt                                            link the live workers of every run to their
@@ -592,10 +594,10 @@ case "$CMD" in
 
   report)
     bind_run
-    FROM= TYPE= SUBJ= BODY= BODY_FILE= OUTCOME=
+    FROM= TYPE= SUBJ= BODY= BODY_FILE= OUTCOME= KEY=
     while [ $# -gt 0 ]; do
       case "$1" in
-        --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;; --subject) SUBJ=$2; shift 2 ;;
+        --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;; --subject) SUBJ=$2; shift 2 ;; --key) KEY=$2; shift 2 ;;
         --body) BODY=$2; shift 2 ;; --body-file) BODY_FILE=$2; shift 2 ;; --outcome) OUTCOME=$2; shift 2 ;;
         *) die "report: unknown option $1" ;;
       esac
@@ -603,9 +605,14 @@ case "$CMD" in
     case "$TYPE" in status|question|escalation|worker_done) ;; *) die "report: --type must be status|question|escalation|worker_done" ;; esac
     # The name goes into a line typed into the supervisor's prompt.
     case "$FROM" in ""|*[!A-Za-z0-9_.-]*) die "report: --from must be an agent name ([A-Za-z0-9_.-])" ;; esac
+    # A key repeats within the agent's current attempt, so a resumed or retried attempt can report again.
+    SINCE=$(jq -r --arg a "$FROM" '[.[] | select(.agent == $a)] | last | .created // empty' "$LEDGER")
     SENT=$("$MAIL" send --inbox "$INBOX" --from "$FROM" --type "$TYPE" --subject "$SUBJ" \
-      ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"})
+      ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"} \
+      ${KEY:+--key "$KEY"} ${SINCE:+--since "$SINCE"})
     echo "$SENT"
+    # The supervisor already has a repeat, and was woken for it once.
+    [ "$(jq -r '.duplicate // false' <<<"$SENT")" = false ] || exit 0
     # A worker that is done stays linked for the tree and sends no more reports.
     [ "$TYPE" != worker_done ] || supervise "$FROM"
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)

@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # File mailbox between dispatched agents and their supervisor: one JSON object per line.
 #   mail.sh send  --inbox F --from NAME --type T --subject S [--body TEXT | --body-file F] [--outcome O] [--reply-to ID]
+#                 [--key K [--since TS]]
+#                 a repeat is not appended and prints {sent: <first id>, duplicate: true}: with --key, a message
+#                 from NAME with key K that is un-acked or sent at or after TS (any time with no --since);
+#                 without --key, an un-acked message from NAME with the same content
 #   mail.sh read  --inbox F [--id ID] [--unacked] [--types T,T]   # message(s) as JSON lines
 #   mail.sh ack   --inbox F --id ID [--id ID ...]                 # mark handled; acked messages are never replayed
 #   mail.sh wait  --inbox F [--types T,T] [--timeout SECONDS]     # block until an un-acked message of a wanted type exists
@@ -13,13 +17,14 @@
 set -euo pipefail
 
 CMD=${1:-}; shift || true
-INBOX= FROM= TYPE= SUBJECT= BODY= BODY_FILE= OUTCOME= REPLY_TO= TYPES= INTERVAL=5 TIMEOUT=0 UNACKED=0
+INBOX= FROM= TYPE= SUBJECT= BODY= BODY_FILE= OUTCOME= REPLY_TO= KEY= SINCE= TYPES= INTERVAL=5 TIMEOUT=0 UNACKED=0
 IDS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --inbox) INBOX=$2; shift 2 ;; --from) FROM=$2; shift 2 ;; --type) TYPE=$2; shift 2 ;;
     --subject) SUBJECT=$2; shift 2 ;; --body) BODY=$2; shift 2 ;; --body-file) BODY_FILE=$2; shift 2 ;;
     --outcome) OUTCOME=$2; shift 2 ;; --reply-to) REPLY_TO=$2; shift 2 ;; --id) IDS+=("$2"); shift 2 ;;
+    --key) KEY=$2; shift 2 ;; --since) SINCE=$2; shift 2 ;;
     --types) TYPES=$2; shift 2 ;; --interval) INTERVAL=$2; shift 2 ;; --timeout) TIMEOUT=$2; shift 2 ;;
     --unacked) UNACKED=1; shift ;;
     *) echo "mail.sh: unknown option $1" >&2; exit 2 ;;
@@ -50,13 +55,24 @@ case "$CMD" in
     [ -z "$BODY_FILE" ] || BODY=$(cat "$BODY_FILE")
     LINE=$(jq -cn --arg id "msg_$(date +%s%N)_$$" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg from "$FROM" \
       --arg type "$TYPE" --arg subject "$SUBJECT" --arg body "$BODY" --arg outcome "$OUTCOME" --arg reply_to "$REPLY_TO" \
+      --arg key "$KEY" \
       '{id:$id, ts:$ts, from:$from, type:$type, subject:$subject, body:$body}
        + (if $outcome == "" then {} else {outcome:$outcome} end)
-       + (if $reply_to == "" then {} else {reply_to:$reply_to} end)')
-    mkdir -p "$(dirname "$INBOX")"
-    # Lock: bodies can exceed the size the kernel appends atomically.
-    ( flock 9; printf '%s\n' "$LINE" >>"$INBOX" ) 9>"$INBOX.lock"
-    echo "$LINE" | jq -c '{sent:.id}'
+       + (if $reply_to == "" then {} else {reply_to:$reply_to} end)
+       + (if $key == "" then {} else {key:$key} end)')
+    mkdir -p "$(dirname "$INBOX")"; touch "$INBOX" "$ACKED"
+    # Lock: bodies can exceed the size the kernel appends atomically, and the repeat check must see
+    # every append and ack before it.
+    { flock 9
+      DUP=$(jq -nr --rawfile acked "$ACKED" --argjson m "$LINE" --arg since "$SINCE" '
+        ($acked | split("\n") | map(select(length > 0) | {key: ., value: true}) | from_entries) as $a
+        | first(inputs | select(.from == $m.from)
+            | if $m.key != null then select(.key == $m.key and (($a[.id] | not) or .ts >= $since))
+              else select(($a[.id] | not) and .type == $m.type and .subject == $m.subject and .body == $m.body
+                          and .outcome == $m.outcome and .reply_to == $m.reply_to) end) | .id' "$INBOX" 2>/dev/null || true)
+      if [ -n "$DUP" ]; then jq -cn --arg id "$DUP" '{sent: $id, duplicate: true}'
+      else printf '%s\n' "$LINE" >>"$INBOX"; jq -c '{sent: .id}' <<<"$LINE"; fi
+    } 9>"$INBOX.lock"
     ;;
   read)
     touch "$INBOX"

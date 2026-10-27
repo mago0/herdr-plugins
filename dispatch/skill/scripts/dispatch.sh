@@ -104,17 +104,18 @@ deps_met() {
 # The issue key at the start of a name, upper case, or nothing: sre-142-fix-probes -> SRE-142.
 ticket_of() { printf '%s' "$1" | sed -nE 's/^([A-Za-z]{2,6})-([0-9]{1,5})(-.*)?$/\1-\2/p' | tr '[:lower:]' '[:upper:]'; }
 
-# Set or clear the label of a pane's row in the sidebar tree.
+# Set or clear Herdr's well-known label token of a pane, shown at the right edge of its row.
 label_pane() {  # <pane> <text>
   [ -n "$1" ] || return 0
-  if [ -n "$2" ]; then herdr pane report-metadata "$1" --source tree --token "label=$2" >/dev/null 2>&1 || true
-  else herdr pane report-metadata "$1" --source tree --clear-token label >/dev/null 2>&1 || true; fi
+  if [ -n "$2" ]; then herdr pane report-metadata "$1" --source dispatch --token "label=$2" >/dev/null 2>&1 || true
+  else herdr pane report-metadata "$1" --source dispatch --clear-token label >/dev/null 2>&1 || true; fi
 }
 
-# Set the web address that the sidebar tree opens for a pane's row. No address sets nothing.
+# Set Herdr's well-known link token of a pane: the web address a sidebar opens for its row.
+# No address sets nothing.
 link_pane() {  # <pane> <url>
   [ -n "$1" ] && [ -n "$2" ] || return 0
-  herdr pane report-metadata "$1" --source tree --token "link=$2" >/dev/null 2>&1 || true
+  herdr pane report-metadata "$1" --source dispatch --token "link=$2" >/dev/null 2>&1 || true
 }
 
 # Refuse a link that is not an http or https address.
@@ -217,18 +218,19 @@ launch_ready() {
   done
 }
 
-# Close the parent workspace Herdr opened on <repo root> for a dispatch, once it is unused:
-# marked dispatch-made, no linked worktree workspace left, one pane, no agent.
+# Close the parent workspace Herdr opened on <repo root> for a worktree, once it is unused:
+# marked, no linked worktree workspace left, one pane, no agent.
 close_idle_parent() {  # <repo path>
   local root list parent
   root=$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || return 0
   root=$(dirname "$root")
   list=$(herdr workspace list 2>/dev/null) || return 0
   [ "$(jq --arg k "$root/.git" '[.result.workspaces[]? | select(.worktree.repo_key == $k and .worktree.is_linked_worktree)] | length' <<<"$list")" = 0 ] || return 0
+  # The mark is Herdr's. The token marks a parent that a server without the mark opened.
   parent=$(jq -r --arg root "$root" 'first(.result.workspaces[]? | select(.worktree.checkout_path == $root
-      and .worktree.is_linked_worktree == false and .pane_count == 1) | .workspace_id) // empty' <<<"$list")
+      and .worktree.is_linked_worktree == false and .pane_count == 1
+      and (.opened_for_worktrees == true or .tokens.dispatch_parent == "1")) | .workspace_id) // empty' <<<"$list")
   [ -n "$parent" ] || return 0
-  [ "$(herdr workspace get "$parent" 2>/dev/null | jq -r '.result.workspace.tokens.dispatch_parent // empty')" = 1 ] || return 0
   [ "$(herdr agent list 2>/dev/null | jq --arg w "$parent" '[.result.agents[]? | select(.workspace_id == $w)] | length')" = 0 ] || return 0
   # A plain close: Herdr refuses it if the group still has a worktree workspace.
   herdr workspace close "$parent" >/dev/null 2>&1 || true

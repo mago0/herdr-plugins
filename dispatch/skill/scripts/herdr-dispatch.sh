@@ -126,11 +126,13 @@ if [ -z "$PANE" ]; then
   WS=$(echo "$OUT" | jq -r .result.workspace.workspace_id)
 fi
 
-# Herdr also opens the main checkout as a parent workspace when none is open. The token marks
-# that parent as dispatch-made, so `dispatch.sh` release closes it after its last worktree.
+# Herdr also opens the main checkout as a parent workspace when none is open, and marks it
+# opened_for_worktrees. The token stands in for that mark on a server that predates it.
 if [ -z "$PARENT_BEFORE" ]; then
   PARENT=$(parent_ws)
-  [ -z "$PARENT" ] || herdr workspace report-metadata "$PARENT" --source dispatch --token dispatch_parent=1 >/dev/null 2>&1 || true
+  if [ -n "$PARENT" ] && [ "$(herdr workspace get "$PARENT" 2>/dev/null | jq -r '.result.workspace.opened_for_worktrees // false')" != true ]; then
+    herdr workspace report-metadata "$PARENT" --source dispatch --token dispatch_parent=1 >/dev/null 2>&1 || true
+  fi
 fi
 
 PROMPT=$(cat "$PROMPT_FILE")

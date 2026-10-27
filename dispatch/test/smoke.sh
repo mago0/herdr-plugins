@@ -117,6 +117,38 @@ echo "$OUT" | grep -q "placed as a tab" || fail "release of a tab worker did not
 "$D" stop --run smoke --dispatch d_tab >/dev/null 2>&1 && fail "stop of a tab worker said it stopped"
 "$D" show --run smoke --dispatch d_tab | jq -e '.status != "stopped"' >/dev/null || fail "a tab worker was marked stopped"
 
+# Release closes the parent workspace Herdr opened for the worktree when it carries Herdr's mark,
+# or the token that a server without the mark gets. A shim stands in for herdr.
+PS="$XDG_STATE_HOME/parent-shim" REPO="$XDG_STATE_HOME/repo"; mkdir -p "$PS/bin"; git init -q "$REPO"
+cat >"$PS/bin/herdr" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "worktree remove") echo '{"result":{}}' ;;
+  "workspace list") cat "$PS/list.json" ;;
+  "agent list") echo '{"result":{"agents":[]}}' ;;
+  "workspace close") echo "\$3" >>"$PS/closed" ;;
+  *) exit 1 ;;
+esac
+EOF
+chmod +x "$PS/bin/herdr"
+release_with_parent() {  # <name> <jq filter that marks the parent workspace>
+  jq -n --arg root "$REPO" "{result: {workspaces: [{workspace_id: \"wp\", pane_count: 1,
+    worktree: {checkout_path: \$root, repo_key: (\$root + \"/.git\"), is_linked_worktree: false}} | $2]}}" >"$PS/list.json"
+  rm -f "$PS/closed"
+  jq --arg d "d_p_$1" --arg n "p-$1" --arg r "$REPO" '. + [{dispatch: $d, attempt: 1, status: "working", agent: $n,
+    workspace_id: "w-gone", after: [], launch: {repo: $r}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+  local id; id=$("$D" report --run smoke --from "p-$1" --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+  PATH="$PS/bin:$PATH" "$D" ack --run smoke --id "$id" --decision release >/dev/null 2>&1 || fail "release p-$1"
+}
+release_with_parent mark '.opened_for_worktrees = true'
+[ "$(cat "$PS/closed" 2>/dev/null)" = wp ] || fail "release left a parent with Herdr's mark open"
+release_with_parent token '.tokens = {dispatch_parent: "1"}'
+[ "$(cat "$PS/closed" 2>/dev/null)" = wp ] || fail "release left a parent with the dispatch_parent token open"
+release_with_parent none '.'
+[ ! -e "$PS/closed" ] || fail "release closed a parent that Herdr did not open for a worktree"
+release_with_parent taken '.opened_for_worktrees = true | .pane_count = 2'
+[ ! -e "$PS/closed" ] || fail "release closed a parent with a second pane"
+
 # Settlement is safe to re-run. For a fake workspace (fk-*) the shim makes `herdr worktree remove`
 # kill the command that called it (a crash between settle and release), fail as dirty, or remove.
 WR="$XDG_STATE_HOME/wt-remove" WTS="$XDG_STATE_HOME/wt"

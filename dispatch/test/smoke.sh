@@ -19,7 +19,9 @@ ID=$("$D" report --run smoke --from w1 --type status --subject "hello | pipe" | 
 "$D" ack --run smoke --id "$ID" | jq -e '.type == "status"' >/dev/null || fail ack
 DONE=$("$D" report --run smoke --from w1 --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
 "$D" ack --run smoke --id "$DONE" 2>/dev/null && fail "ack of worker_done without --decision"
-"$D" ack --run smoke --id "$DONE" --decision retain 2>/dev/null | jq -e '.type == "worker_done"' >/dev/null || fail "ack worker_done"
+"$D" ack --run smoke --id "$DONE" --decision retain 2>/dev/null && fail "retain without --reason and --until"
+"$D" ack --run smoke --id "$DONE" --decision release --until x 2>/dev/null && fail "release took --until"
+"$D" ack --run smoke --id "$DONE" --decision retain --reason r --until u 2>/dev/null | jq -e '.type == "worker_done"' >/dev/null || fail "ack worker_done"
 # Unacked keeps inbox order and leaves out exactly the acked ids.
 M="$(dirname "$D")/mail.sh" MB="$XDG_STATE_HOME/mb.jsonl"
 for s in a b c d; do "$M" send --inbox "$MB" --from w --type status --subject "$s" >/dev/null; done
@@ -56,9 +58,21 @@ rm -f "$T"
 
 "$D" send --run smoke --agent nobody --subject s --body b 2>/dev/null && fail "send to an agent that is not in the run"
 
+# A kept worker shows why and until when, in show and ps. An entry from before has no reason.
+L="$ST/runs/smoke/ledger.json"
+jq '. + [{dispatch: "d_keep", attempt: 1, status: "working", agent: "keeper", after: [], launch: {}},
+         {dispatch: "d_old", attempt: 1, status: "settled", outcome: "succeeded", decision: "retain", agent: "old", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+KD=$("$D" report --run smoke --from keeper --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+"$D" ack --run smoke --id "$KD" --decision retain --reason "re-review pending" --until "the re-review lands" >/dev/null 2>&1 || fail "ack retain with a reason"
+"$D" show --run smoke --dispatch d_keep | jq -e '.decision_reason == "re-review pending" and .release_when == "the re-review lands"' >/dev/null || fail "show has no reason"
+"$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_keep") | .reason == "re-review pending" and (.next | test("the re-review lands"))' >/dev/null || fail "ps has no reason"
+"$D" ps --run smoke | grep -q "kept (retain): re-review pending" || fail "ps table has no reason"
+"$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_old") | .reason == null and (.next | test("no reason recorded"))' >/dev/null || fail "ps on an entry with no reason"
+SD=$("$D" report --run smoke --from keeper --type status --subject s | jq -r .sent)
+"$D" ack --run smoke --id "$SD" --reason r 2>/dev/null && fail "--reason on a status ack"
+
 # A worker that an older version placed as a tab shares its supervisor's workspace: release
 # must not remove that workspace.
-L="$ST/runs/smoke/ledger.json"
 jq '. + [{dispatch: "d_tab", attempt: 1, status: "working", agent: "tabbed", placement: "tab", tab_id: "w-none:t9",
           workspace_id: "w-none", worktree: "/src/x/_worktrees/t", after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
 TD=$("$D" report --run smoke --from tabbed --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)

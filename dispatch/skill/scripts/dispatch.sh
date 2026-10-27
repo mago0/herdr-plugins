@@ -12,7 +12,8 @@
 #                       --link: web address the sidebar tree opens for the row, such as that of the issue
 #   dispatch.sh wait    [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
 #   dispatch.sh read    --id <msg>                               full message JSON
-#   dispatch.sh ack     --id <msg> [--decision reuse|retain|release]   settle; worker_done requires --decision
+#   dispatch.sh ack     --id <msg> [--decision reuse|retain|release] [--reason <why>] [--until <condition>]
+#                       settle; worker_done requires --decision, and retain or reuse also --reason and --until
 #   dispatch.sh reply   --id <question> (--body <text> | --body-file <f>)   answer into the worker's inbox
 #   dispatch.sh send    --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
 #   dispatch.sh ps      [--json]                                 fleet: status, liveness, attention, next action
@@ -316,18 +317,27 @@ case "$CMD" in
 
   ack)
     bind_run
-    ID= DECISION=
-    while [ $# -gt 0 ]; do case "$1" in --id) ID=$2; shift 2 ;; --decision) DECISION=$2; shift 2 ;; *) die "ack: unknown option $1" ;; esac; done
+    ID= DECISION= REASON= UNTIL=
+    while [ $# -gt 0 ]; do case "$1" in --id) ID=$2; shift 2 ;; --decision) DECISION=$2; shift 2 ;; --reason) REASON=$2; shift 2 ;; --until) UNTIL=$2; shift 2 ;; *) die "ack: unknown option $1" ;; esac; done
     [ -n "$ID" ] || die "ack needs --id"
     MSG=$("$MAIL" read --inbox "$INBOX" --id "$ID"); [ -n "$MSG" ] || die "no message $ID in run $RUN"
     TYPE=$(jq -r .type <<<"$MSG"); FROM=$(jq -r .from <<<"$MSG"); D= OUTCOME=
+    [ "$TYPE" = worker_done ] || [ -z "$REASON$UNTIL" ] || die "--reason and --until go with the decision on a worker_done"
     if [ "$TYPE" = worker_done ]; then
       case "$DECISION" in reuse|retain|release) ;; *) die "acking a worker_done requires --decision reuse|retain|release" ;; esac
+      # A kept worker is a cost until it is released, so the ledger says why and until when.
+      if [ "$DECISION" != release ]; then
+        [ -n "$REASON" ] && [ -n "$UNTIL" ] || die "--decision $DECISION needs --reason <why> and --until <release condition>"
+      else
+        [ -z "$UNTIL" ] || die "--until is the release condition of a retain or reuse"
+      fi
       OUTCOME=$(jq -r '.outcome // "unspecified"' <<<"$MSG")
       D=$(jq -r --arg a "$FROM" '[.[] | select(.agent == $a and .status == "working")] | last | .dispatch // empty' "$LEDGER")
       if [ -n "$D" ]; then
-        ledger_mod --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" --arg ts "$(now)" \
-          'map(if .dispatch == $d then .status = "settled" | .outcome = $o | .decision = $dec | .settled = $ts else . end)'
+        ledger_mod --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" --arg ts "$(now)" --arg why "$REASON" --arg until "$UNTIL" \
+          'map(if .dispatch == $d then .status = "settled" | .outcome = $o | .decision = $dec | .settled = $ts
+               | .decision_reason = (if $why == "" then null else $why end)
+               | .release_when = (if $until == "" then null else $until end) else . end)'
         [ "$DECISION" != release ] || release_worker "$FROM" "$D"
       else
         echo "dispatch.sh: warning: no working dispatch for agent $FROM; acked without settlement" >&2
@@ -336,7 +346,9 @@ case "$CMD" in
     "$MAIL" ack --inbox "$INBOX" --id "$ID" >/dev/null
     [ "$TYPE" != worker_done ] || [ -z "$D" ] || launch_ready
     jq -cn --arg id "$ID" --arg t "$TYPE" --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" \
-      '{acked: $id, type: $t} + (if $d == "" then {} else {dispatch: $d, outcome: $o, decision: $dec} end)'
+      --arg why "$REASON" --arg until "$UNTIL" \
+      '{acked: $id, type: $t} + (if $d == "" then {} else {dispatch: $d, outcome: $o, decision: $dec}
+         + (if $why == "" then {} else {reason: $why} end) + (if $until == "" then {} else {until: $until} end) end)'
     ;;
 
   reply)
@@ -415,9 +427,12 @@ case "$CMD" in
          elif $att == "dep failed" then "\($mail) retry --dispatch \($failed_deps | first)"
          elif $att == "waiting deps" then "-"
          elif $att == "ready" then "launching on next ack"
+         elif ($e.decision == "retain" or $e.decision == "reuse") and $e.released == null then
+           "kept (\($e.decision)): \($e.decision_reason // "no reason recorded"); release when \($e.release_when // "not recorded")"
          else "\($mail) wait" end) as $next
       | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
-         liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // [])}' "$LEDGER")
+         liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
+         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when}' "$LEDGER")
     if [ "$JSON" = 1 ]; then jq -s . <<<"$ROWS"; else
       { printf 'DISPATCH\tAGENT\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
         jq -r '[.dispatch, .agent, .status, .outcome, .liveness, .attention, .next] | @tsv' <<<"$ROWS"; } | column -t -s $'\t'

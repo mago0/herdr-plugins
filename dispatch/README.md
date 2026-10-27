@@ -44,7 +44,7 @@ The line is only a wake. The supervisor reads the message from the mailbox, chec
 
 ```sh
 dispatch.sh read --id msg_1791236483_162548
-dispatch.sh ack  --id msg_1791236483_162548 --decision release    # or retain, or reuse
+dispatch.sh ack  --id msg_1791236483_162548 --decision release    # or retain/reuse with --reason and --until
 ```
 
 Other lines it can receive:

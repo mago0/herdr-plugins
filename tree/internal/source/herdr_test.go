@@ -262,6 +262,66 @@ func TestSnapshotReadsWhatHerdrKnowsAboutSupervision(t *testing.T) {
 	}
 }
 
+func TestSnapshotCountsTheJobsOfEachPane(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list": `{"id":"tree","result":{"agents":[
+			{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"},
+			{"pane_id":"w2:p1","tab_id":"w2:t1","workspace_id":"w2","agent":"claude"},
+			{"pane_id":"w3:p1","tab_id":"w3:t1","workspace_id":"w3","agent":"claude"}]}}`,
+		"pane.list": `{"id":"tree","result":{"panes":[]}}`,
+		"job.list": `{"id":"tree","result":{"jobs":[
+			{"name":"a","command":["/x/pr-watch.sh","o/r","5"],"every_ms":300000,"owner_pane_id":"w1:p1","target_pane_id":"w1:p1"},
+			{"name":"b","command":["sh","-c","true"],"every_ms":86400000,"on_events":["pane.closed"],"owner_pane_id":"w1:p1","target_pane_id":"w1:p1"},
+			{"name":"c","command":["probe"],"on_path":"/tmp/f","owner_pane_id":"w1:p1","target_pane_id":"w2:p1"},
+			{"name":"d","command":["x"],"every_ms":5400000}]}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := []int{len(got.Agents[0].Jobs), len(got.Agents[1].Jobs), len(got.Agents[2].Jobs)}; !reflect.DeepEqual(j, []int{3, 1, 0}) {
+		t.Fatalf("jobs = %v", j)
+	}
+	want := []model.Job{
+		{Name: "a", Trigger: "every 5m", Command: "pr-watch.sh o/r 5"},
+		{Name: "b", Trigger: "every 24h, on pane.closed", Command: "sh -c true"},
+		{Name: "c", Trigger: "path /tmp/f", Command: "probe"},
+	}
+	if !reflect.DeepEqual(got.Agents[0].Jobs, want) {
+		t.Fatalf("jobs of w1:p1 = %+v", got.Agents[0].Jobs)
+	}
+	if got.Agents[1].Jobs[0].Name != "c" {
+		t.Fatalf("jobs of w2:p1 = %+v", got.Agents[1].Jobs)
+	}
+}
+
+func TestEvery(t *testing.T) {
+	for ms, want := range map[uint64]string{300000: "5m", 86400000: "24h", 5400000: "1h30m", 30000: "30s", 90000: "1m30s"} {
+		if got := every(ms); got != want {
+			t.Errorf("every(%d) = %q, want %q", ms, got, want)
+		}
+	}
+}
+
+func TestSnapshotWithoutJobsOnTheServer(t *testing.T) {
+	s := serve(t, map[string]string{
+		"workspace.list": `{"id":"tree","result":{"workspaces":[]}}`,
+		"tab.list":       `{"id":"tree","result":{"tabs":[]}}`,
+		"agent.list":     `{"id":"tree","result":{"agents":[{"pane_id":"w1:p1","tab_id":"w1:t1","workspace_id":"w1","agent":"claude"}]}}`,
+		"pane.list":      `{"id":"tree","result":{"panes":[]}}`,
+		"job.list":       `{"id":"tree","error":{"code":"unknown_method","message":"job.list"}}`,
+	})
+	got, err := Snapshot(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Agents[0].Jobs) != 0 {
+		t.Fatalf("jobs = %v", got.Agents[0].Jobs)
+	}
+}
+
 func TestFocused(t *testing.T) {
 	s := serve(t, map[string]string{
 		"pane.list": `{"id":"tree","result":{"panes":[

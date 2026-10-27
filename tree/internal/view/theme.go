@@ -24,6 +24,8 @@ type Theme struct {
 	RepoColor string
 	// PendingGlyph stands before the count of prompts Herdr holds for a row.
 	PendingGlyph string
+	// JobsGlyph stands before the count of Herdr jobs a row owns or receives.
+	JobsGlyph string
 }
 
 // DefaultTheme uses Nerd Font glyphs for the worktree and held prompts.
@@ -42,6 +44,7 @@ func DefaultTheme() Theme {
 		ShellGlyph:    "$",
 		WorktreeGlyph: "\ue0a0",
 		PendingGlyph:  "\uf0e0",
+		JobsGlyph:     "\uf017",
 	}
 }
 
@@ -53,6 +56,7 @@ func LoadTheme(configDir string) Theme {
 			Shell    string `toml:"shell"`
 			Worktree string `toml:"worktree"`
 			Pending  string `toml:"pending"`
+			Jobs     string `toml:"jobs"`
 		} `toml:"glyphs"`
 		Colors map[string]string `toml:"colors"`
 	}
@@ -70,6 +74,9 @@ func LoadTheme(configDir string) Theme {
 	}
 	if file.Glyphs.Pending != "" {
 		th.PendingGlyph = file.Glyphs.Pending
+	}
+	if file.Glyphs.Jobs != "" {
+		th.JobsGlyph = file.Glyphs.Jobs
 	}
 	for state, color := range file.Colors {
 		if _, known := th.Colors[state]; known && color != "" {
@@ -89,6 +96,14 @@ func (th Theme) pending(n int) string {
 		return fmt.Sprintf("+%d", n)
 	}
 	return fmt.Sprintf("%s %d", th.PendingGlyph, n)
+}
+
+// jobs is the mark for the Herdr jobs a row owns or receives, with their count.
+func (th Theme) jobs(n int) string {
+	if th.Plain {
+		return fmt.Sprintf("@%d", n)
+	}
+	return fmt.Sprintf("%s %d", th.JobsGlyph, n)
 }
 
 func (th Theme) dot(status string) string {

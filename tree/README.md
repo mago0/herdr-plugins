@@ -126,6 +126,8 @@ The state dot of a row is orange (`~` in plain text) when the agent reports work
 
 A row has an envelope and a count after its name when Herdr holds prompts for that pane until it is safe to type them, for example a wake line for the pane you have in focus. The glyph is `pending` under `[glyphs]`.
 
+A row has a clock and a count after that when the pane owns Herdr jobs or receives their news, for example a pull request watch (`herdr job list` shows them). The glyph is `jobs` under `[glyphs]`. A Herdr server with no jobs shows none. With the pointer on that mark, the last lines of the pane name each job, when it runs and its command, such as `pr-watch-ops-7 · every 5m · pr-watch.sh o/ops 7`. The lines move to the top when the row is near the bottom, and go away 10 seconds after the pointer stops moving.
+
 The counts after a branch are `-N` for commits behind and `+N` for commits ahead. A count of zero is not shown, and a branch with nothing to count against has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the pane does not fetch, and it asks Git again every 10 seconds.
 
 `reported` comes from the [dispatch](../dispatch/) ledgers in `$XDG_STATE_HOME/agent-dispatch/runs` (`~/.local/state/agent-dispatch/runs` by default): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`, and the supervisor has sent it no follow-up since (`dispatch.sh send`). It is not shown while the worker is working.
@@ -163,10 +165,11 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source my-loop --token tree=hide
 
 ```toml
 [glyphs]
-# The default worktree and pending glyphs are Nerd Font icons. These work in any font.
+# The default worktree, pending and jobs glyphs are Nerd Font icons. These work in any font.
 shell = "$"
 worktree = "⎇"
 pending = "+"
+jobs = "@"
 
 [colors]
 blocked = "#f38ba8"

@@ -65,6 +65,8 @@ const (
 	wheelRows   = 3
 	// hoverTicks is how many ticks a pointer that does not move keeps the last line.
 	hoverTicks = 5
+	// jobTicks is the same for the job lines of a row, which take longer to read.
+	jobTicks = 10
 	// failedTicks is how many ticks the error of a move stays on screen.
 	failedTicks = 5
 )
@@ -82,6 +84,10 @@ type Program struct {
 	// hover is the row under the pointer, and still counts the ticks since the pointer moved.
 	hover string
 	still int
+	// onJobs is true while the pointer is on the jobs mark of the hover row, and hoverY is the
+	// line of the pane the pointer is on.
+	onJobs bool
+	hoverY int
 	// grab is the row the left button went down on, and dragging is true once the pointer has
 	// left that row with the button down.
 	grab     string
@@ -137,7 +143,11 @@ func (p Program) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		p.width, p.height = m.Width, m.Height
 		p.scroll()
 	case tickMsg:
-		if p.still++; p.still >= hoverTicks {
+		limit := hoverTicks
+		if p.onJobs {
+			limit = jobTicks
+		}
+		if p.still++; p.still >= limit {
 			p.hover = ""
 		}
 		if p.failedFor++; p.failedFor >= failedTicks {
@@ -446,10 +456,11 @@ func (p Program) where() string {
 // the button comes up on it, and moves an effort when it comes up on another one.
 func (p Program) mouse(m tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.Action == tea.MouseActionMotion {
-		p.hover, p.still = "", 0
-		i, ok := p.rowAt(m.Y)
+		p.hover, p.still, p.onJobs = "", 0, false
+		i, line, ok := p.lineAt(m.Y)
 		if ok {
-			p.hover = p.rows[i].Node.ID
+			p.hover, p.hoverY = p.rows[i].Node.ID, m.Y
+			p.onJobs = line == p.rows[i].first() && p.overJobs(i, m.X)
 		}
 		// Motion with no button down means the button came up outside the pane.
 		if m.Button != tea.MouseButtonLeft {
@@ -612,18 +623,69 @@ func menuTarget(n *model.Node) string {
 
 // rowAt returns the row drawn on line y of the pane.
 func (p Program) rowAt(y int) (int, bool) {
+	i, _, ok := p.lineAt(y)
+	return i, ok
+}
+
+// lineAt returns the row drawn on line y of the pane and which of its lines y is.
+func (p Program) lineAt(y int) (row, line int, ok bool) {
 	header, _ := p.chrome()
-	line := p.offset + y - header
+	line = p.offset + y - header
 	if y < header || line < 0 {
-		return 0, false
+		return 0, 0, false
 	}
 	for i, r := range p.rows {
 		if line < r.Height() {
-			return i, true
+			return i, line, true
 		}
 		line -= r.Height()
 	}
-	return 0, false
+	return 0, 0, false
+}
+
+// overJobs is true when column x of row i is on its jobs mark or the space before it.
+func (p Program) overJobs(i, x int) bool {
+	_, c := rowLine(p.rows[i], " ", p.width, p.theme)
+	return c.To > 0 && x >= c.From-1 && x < c.To
+}
+
+// withJobs draws the job lines of the row under the pointer over the last lines of the pane, or
+// over the first lines when the pointer is on one of the last. They never cover the pointer's line,
+// and are cut to the room on one side of it when neither end has room.
+func (p Program) withJobs(out []string) []string {
+	if p.hover == "" || !p.onJobs {
+		return out
+	}
+	var n *model.Node
+	for _, r := range p.rows {
+		if r.Node.ID == p.hover {
+			n = r.Node
+		}
+	}
+	if n == nil || len(n.Jobs) == 0 {
+		return out
+	}
+	jobs := jobLines(n, p.width, p.theme)
+	jobs = jobs[:min(len(jobs), len(out)-1)]
+	if len(jobs) == 0 {
+		return out
+	}
+	at := len(out) - len(jobs)
+	switch {
+	case p.hoverY < at:
+	case p.hoverY >= len(jobs):
+		at = 0
+	default:
+		above, below := p.hoverY, len(out)-1-p.hoverY
+		if below >= above {
+			jobs, at = jobs[:below], p.hoverY+1
+		} else {
+			jobs, at = jobs[:above], 0
+		}
+	}
+	out = append([]string(nil), out...)
+	copy(out[at:], jobs)
+	return out
 }
 
 // span returns the first line of row i and the count of lines of all rows.
@@ -713,23 +775,19 @@ func (p Program) View() string {
 	if p.deps.Sidebar {
 		return p.sidebarView()
 	}
-	var b strings.Builder
-	title := " Efforts"
-	b.WriteString(p.theme.paint(title, bold) + "\n\n")
+	out := []string{p.theme.paint(" Efforts", bold), ""}
 	if len(p.rows) == 0 {
-		b.WriteString("   no workspaces\n")
+		out = append(out, "   no workspaces")
 	}
 	lines := Render(p.rows, p.width, p.cursor, p.theme)
 	body := max(1, p.height-popupChrome)
-	for _, line := range lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)] {
-		b.WriteString(line + "\n")
-	}
+	out = append(out, lines[min(p.offset, len(lines)):min(len(lines), p.offset+body)]...)
 	foot := " ↑↓ move  ⇧↑↓ reorder  ⏎ jump  ␣ fold  q close"
 	if err := p.shown(); err != nil {
 		foot = " error: " + err.Error()
 	}
-	b.WriteString(p.theme.paint(cut(foot, p.width), faint))
-	return b.String()
+	out = append(out, p.theme.paint(cut(foot, p.width), faint))
+	return strings.Join(p.withJobs(out), "\n")
 }
 
 // sidebarView is the rows alone. Herdr draws the section title, and the keys are not shown.
@@ -747,5 +805,5 @@ func (p Program) sidebarView() string {
 	if err := p.shown(); err != nil {
 		lines = append(lines, p.theme.paint(cut(" error: "+err.Error(), p.width), faint))
 	}
-	return strings.Join(append(lines, p.where()), "\n")
+	return strings.Join(p.withJobs(append(lines, p.where())), "\n")
 }

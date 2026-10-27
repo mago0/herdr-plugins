@@ -204,6 +204,10 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 			BlockerLines: a.Lines, Dialog: a.Dialog, PaneName: paneName[a.Pane],
 		})
 	}
+	jobs := jobsOf(c)
+	for i := range s.Agents {
+		s.Agents[i].Jobs = jobs[s.Agents[i].PaneID]
+	}
 	isAgent := map[string]bool{}
 	for _, a := range agents.Agents {
 		isAgent[a.Pane] = true
@@ -222,6 +226,62 @@ func Snapshot(c Caller) (model.Snapshot, error) {
 		})
 	}
 	return s, nil
+}
+
+// jobsOf lists the jobs that each pane owns or that deliver to it. It is empty when the server
+// has no jobs or no job.list.
+func jobsOf(c Caller) map[string][]model.Job {
+	var list struct {
+		Jobs []struct {
+			Name    string   `json:"name"`
+			Command []string `json:"command"`
+			Every   uint64   `json:"every_ms"`
+			On      []string `json:"on_events"`
+			Path    string   `json:"on_path"`
+			Owner   string   `json:"owner_pane_id"`
+			Target  string   `json:"target_pane_id"`
+		} `json:"jobs"`
+	}
+	out := map[string][]model.Job{}
+	if err := c.Call("job.list", nil, &list); err != nil {
+		return out
+	}
+	for _, j := range list.Jobs {
+		var when []string
+		if j.Every > 0 {
+			when = append(when, "every "+every(j.Every))
+		}
+		if len(j.On) > 0 {
+			when = append(when, "on "+strings.Join(j.On, ","))
+		}
+		if j.Path != "" {
+			when = append(when, "path "+j.Path)
+		}
+		argv := append([]string(nil), j.Command...)
+		if len(argv) > 0 {
+			argv[0] = filepath.Base(argv[0])
+		}
+		job := model.Job{Name: j.Name, Trigger: strings.Join(when, ", "), Command: strings.Join(argv, " ")}
+		if j.Owner != "" {
+			out[j.Owner] = append(out[j.Owner], job)
+		}
+		if j.Target != "" && j.Target != j.Owner {
+			out[j.Target] = append(out[j.Target], job)
+		}
+	}
+	return out
+}
+
+// every is an interval in the short form a person writes: 5m, 24h, 1h30m.
+func every(ms uint64) string {
+	s := (time.Duration(ms) * time.Millisecond).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = strings.TrimSuffix(s, "0s")
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = strings.TrimSuffix(s, "0m")
+	}
+	return s
 }
 
 // shells are the programs that stand for an idle pane: a shell at its prompt.

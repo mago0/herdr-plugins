@@ -53,6 +53,8 @@ type Agent struct {
 	Repo string
 	// Pending counts the prompts Herdr holds for this pane until it is safe to type them.
 	Pending int
+	// Jobs are the Herdr jobs that this pane owns or that deliver to it.
+	Jobs []Job
 	// Stalled is true when the agent reports working and its screen does not change.
 	Stalled bool
 	// Blocker is what a blocked agent waits for, when Herdr knows it. BlockerLines is the same
@@ -64,6 +66,15 @@ type Agent struct {
 	Reported bool
 	// PaneName is the name the user gave the agent's pane, or "".
 	PaneName string
+}
+
+// Job is one Herdr job that a pane owns or that delivers to it.
+type Job struct {
+	Name string
+	// Trigger is when the job runs, such as "every 5m".
+	Trigger string
+	// Command is the program, without its folder, and its arguments.
+	Command string
 }
 
 // Shell is one pane that hosts no agent.
@@ -114,8 +125,9 @@ type Node struct {
 	Command string
 	// Link is the web address that the pane of the row names for its work, or "".
 	Link string
-	// Pending, Stalled and Blocker are those of the row's agent.
+	// Pending, Jobs, Stalled and Blocker are those of the row's agent.
 	Pending int
+	Jobs    []Job
 	Stalled bool
 	Blocker string
 	// Answers are the choices of the dialog a blocked agent shows, when one key picks each.

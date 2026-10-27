@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/mago0/herdr-plugins/tree/internal/model"
 )
 
@@ -965,5 +966,69 @@ func TestSidebarFoldsAnAgentWithWorkers(t *testing.T) {
 	p = send(t, on(t, p, "a"), key("space"))
 	if p.rows[1].Folded {
 		t.Fatal("an agent with no workers does not fold")
+	}
+}
+
+func TestSidebarJobLinesOnTheJobsMark(t *testing.T) {
+	tr := places()
+	tr.Roots[0].Children[1].Jobs = []model.Job{
+		{Name: "pr-watch-ops-7", Trigger: "every 5m", Command: "pr-watch.sh o/ops 7"},
+		{Name: "probe", Trigger: "on pane.closed"},
+	}
+	f := &fake{tree: tr}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 60, Height: 8})
+	row := strings.Split(p.View(), "\n")[2]
+	at := strings.Index(row, "@2")
+	if at < 0 {
+		t.Fatalf("no jobs mark on the row of b:\n%s", p.View())
+	}
+	x := lipgloss.Width(row[:at])
+	jobs := []string{" pr-watch-ops-7 · every 5m · pr-watch.sh o/ops 7", " probe · on pane.closed"}
+	shows := func(p Program) bool {
+		lines := strings.Split(p.View(), "\n")
+		return strings.Join(lines[len(lines)-2:], "\n") == strings.Join(jobs, "\n")
+	}
+	p = send(t, p, hover(x, 2))
+	if !shows(p) {
+		t.Fatalf("the pointer on the jobs mark shows the jobs at the bottom:\n%s", p.View())
+	}
+	if n := strings.Count(p.View(), "\n") + 1; n != 8 {
+		t.Fatalf("the job lines take the place of rows, the view is %d lines in a pane of 8", n)
+	}
+	p = send(t, p, hover(3, 2))
+	if shows(p) || lastLine(p) != " ops/_worktrees/b" {
+		t.Fatalf("the pointer on the rest of the row says where it works:\n%s", p.View())
+	}
+	p = send(t, p, hover(x, 2))
+	for i := 0; i < hoverTicks; i++ {
+		p = send(t, p, tickMsg{})
+	}
+	if !shows(p) {
+		t.Fatalf("the job lines stay longer than the last line does:\n%s", p.View())
+	}
+	for i := hoverTicks; i < jobTicks; i++ {
+		p = send(t, p, tickMsg{})
+	}
+	if shows(p) {
+		t.Fatalf("a still pointer lets the job lines go:\n%s", p.View())
+	}
+}
+
+func TestSidebarJobLinesNeverCoverThePointer(t *testing.T) {
+	tr := places()
+	tr.Roots[0].Children[1].Jobs = []model.Job{{Name: "a"}, {Name: "b"}, {Name: "c"}}
+	f := &fake{tree: tr}
+	p := sidebar(t, f)
+	p = send(t, p, tea.WindowSizeMsg{Width: 60, Height: 4})
+	row := strings.Split(p.View(), "\n")[2]
+	at := strings.Index(row, "@3")
+	if at < 0 {
+		t.Fatalf("no jobs mark on the row of b:\n%s", p.View())
+	}
+	p = send(t, p, hover(lipgloss.Width(row[:at]), 2))
+	lines := strings.Split(p.View(), "\n")
+	if strings.Join(lines[:2], "|") != " a| b" || !strings.Contains(lines[2], "@3") {
+		t.Fatalf("with no room at either end the job lines fit above the pointer:\n%s", p.View())
 	}
 }

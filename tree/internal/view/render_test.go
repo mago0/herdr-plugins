@@ -134,6 +134,13 @@ func TestRenderCursorHeldPromptsAndStall(t *testing.T) {
 	})
 }
 
+func TestRenderJobs(t *testing.T) {
+	lead := &model.Node{ID: "w1:p1", Label: "lead", Status: model.Idle, Pending: 1, Jobs: []model.Job{{Name: "a"}, {Name: "b"}}, Shown: model.KindPane}
+	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{lead}}
+	got := Render(Rows(model.Tree{Roots: []*model.Node{main}}, State{}), 0, -1, plain())
+	same(t, got[1:], []string{"     o lead +1 @2"})
+}
+
 func TestRenderAStalledDotOnlyForAWorkingAgent(t *testing.T) {
 	done := &model.Node{ID: "w1:p1", Label: "done", Status: model.Done, Stalled: true, Shown: model.KindPane}
 	main := &model.Node{ID: "w1", Label: "Main", Shown: model.KindWorkspace, Children: []*model.Node{done}}

@@ -74,50 +74,7 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		default:
 			mark = bold.Render("▌")
 		}
-		head, after, right, style := mark+th.paint(lead(r), faint), "", "", plainText
-		switch {
-		case r.Depth == 0:
-			style, right = bold, effortTag(n)
-			if r.Folded {
-				after = "  " + rollup(r.Rollup, th)
-			}
-		case n.Shown == model.KindShell:
-			head += th.shell() + " "
-		default:
-			head += th.dot(state(n)) + " "
-			if n.Pending > 0 {
-				after = " " + th.paint(th.pending(n.Pending), faint)
-			}
-			if n.Worker {
-				right = workerTag(n)
-			}
-		}
-		if r.Folded && r.Depth > 0 {
-			after += "  " + rollup(r.Rollup, th)
-		}
-		used := lipgloss.Width(head) + lipgloss.Width(after)
-		tail := 0
-		if right != "" {
-			tail = 2 + lipgloss.Width(right)
-		}
-		label := n.Label
-		if n.Shown == model.KindShell {
-			label = short(label)
-			if n.Command != "" {
-				label += "  " + n.Command
-			}
-		}
-		if width > 0 {
-			label = cut(label, max(minLabel, width-used-tail))
-		}
-		line := head + th.paint(label, style) + after
-		if right != "" {
-			pad := 2
-			if width > 0 {
-				pad = max(2, width-used-lipgloss.Width(label)-lipgloss.Width(right))
-			}
-			line += strings.Repeat(" ", pad) + th.paint(right, tagStyle(n))
-		}
+		line, _ := rowLine(r, mark, width, th)
 		add(line)
 		if r.Repo != "" {
 			under, note := below(r), ""
@@ -132,6 +89,88 @@ func Render(rows []Row, width, selected int, th Theme) []string {
 		}
 	}
 	return lines
+}
+
+// cells is a run of columns on a line, from From up to To.
+type cells struct{ From, To int }
+
+// rowLine draws the first line of a row after its cursor mark, and says which columns hold the
+// jobs mark. Those are empty for a row with no jobs.
+func rowLine(r Row, mark string, width int, th Theme) (string, cells) {
+	n := r.Node
+	head, after, right, style := mark+th.paint(lead(r), faint), "", "", plainText
+	var jobs cells
+	switch {
+	case r.Depth == 0:
+		style, right = bold, effortTag(n)
+		if r.Folded {
+			after = "  " + rollup(r.Rollup, th)
+		}
+	case n.Shown == model.KindShell:
+		head += th.shell() + " "
+	default:
+		head += th.dot(state(n)) + " "
+		if n.Pending > 0 {
+			after = " " + th.paint(th.pending(n.Pending), faint)
+		}
+		if len(n.Jobs) > 0 {
+			mark := th.jobs(len(n.Jobs))
+			jobs = cells{lipgloss.Width(after) + 1, lipgloss.Width(after) + 1 + lipgloss.Width(mark)}
+			after += " " + th.paint(mark, faint)
+		}
+		if n.Worker {
+			right = workerTag(n)
+		}
+	}
+	if r.Folded && r.Depth > 0 {
+		after += "  " + rollup(r.Rollup, th)
+	}
+	used := lipgloss.Width(head) + lipgloss.Width(after)
+	tail := 0
+	if right != "" {
+		tail = 2 + lipgloss.Width(right)
+	}
+	label := n.Label
+	if n.Shown == model.KindShell {
+		label = short(label)
+		if n.Command != "" {
+			label += "  " + n.Command
+		}
+	}
+	if width > 0 {
+		label = cut(label, max(minLabel, width-used-tail))
+	}
+	if jobs.To > 0 {
+		at := lipgloss.Width(head) + lipgloss.Width(label)
+		jobs = cells{at + jobs.From, at + jobs.To}
+	}
+	line := head + th.paint(label, style) + after
+	if right != "" {
+		pad := 2
+		if width > 0 {
+			pad = max(2, width-used-lipgloss.Width(label)-lipgloss.Width(right))
+		}
+		line += strings.Repeat(" ", pad) + th.paint(right, tagStyle(n))
+	}
+	return line, jobs
+}
+
+// jobLines are the lines that name the jobs of a row: name, trigger and command.
+func jobLines(n *model.Node, width int, th Theme) []string {
+	var out []string
+	for _, j := range n.Jobs {
+		text := j.Name
+		for _, part := range []string{j.Trigger, j.Command} {
+			if part != "" {
+				text += " · " + part
+			}
+		}
+		if width > 0 {
+			text = cut(text, width-1)
+		}
+		out = append(out, " "+th.paint(text, faint))
+	}
+	return out
 }
 
 // short abbreviates each folder between the first and the last to its first letter, as fish

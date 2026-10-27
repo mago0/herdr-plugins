@@ -35,6 +35,14 @@ func (r Row) Height() int {
 	return h
 }
 
+// first is the line of the row that holds its name: the second when a blank line is above it.
+func (r Row) first() int {
+	if r.Gap {
+		return 1
+	}
+	return 0
+}
+
 // State is the folds the user has set, by effort id.
 type State struct {
 	Folded map[string]bool

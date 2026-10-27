@@ -75,7 +75,7 @@ func Build(s Snapshot) Tree {
 		nodes[a.PaneID] = &Node{
 			ID: a.PaneID, Focus: KindPane, Shown: KindPane, TabID: a.TabID, WorkspaceID: a.WorkspaceID,
 			Label: label, Status: a.Status, Repo: repo, Where: a.Where, Worktree: a.Worktree,
-			Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link, Pending: a.Pending, Stalled: a.Stalled,
+			Git: of(a.Git, repo), Tag: a.Tag, Link: a.Link, Pending: a.Pending, Jobs: a.Jobs, Stalled: a.Stalled,
 			Blocker: a.Blocker, Answers: answers, Dialog: a.Dialog,
 			Worker: worker, Reported: a.Reported && a.Status != Working,
 		}

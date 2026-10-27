@@ -312,3 +312,25 @@ func TestBuildAShellRowIsItsFolderAndCommand(t *testing.T) {
 		t.Errorf("shell row = %q %q, want the folder and the command", n.Label, n.Command)
 	}
 }
+
+func TestBuildCarriesTheJobsOfAnAgent(t *testing.T) {
+	a := ag("w1:p1", "lead")
+	a.Jobs = []Job{{Name: "x"}, {Name: "y"}}
+	s := Snapshot{Workspaces: []Workspace{ws("w1", "ops", "flosports", 1)}, Agents: []Agent{a}}
+	var jobs []int
+	var walk func(n *Node)
+	walk = func(n *Node) {
+		if n.Shown == KindPane {
+			jobs = append(jobs, len(n.Jobs))
+		}
+		for _, c := range n.Children {
+			walk(c)
+		}
+	}
+	for _, n := range Build(s).Roots {
+		walk(n)
+	}
+	if len(jobs) != 1 || jobs[0] != 2 {
+		t.Fatalf("jobs = %v", jobs)
+	}
+}

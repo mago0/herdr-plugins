@@ -117,4 +117,72 @@ echo "$OUT" | grep -q "placed as a tab" || fail "release of a tab worker did not
 "$D" stop --run smoke --dispatch d_tab >/dev/null 2>&1 && fail "stop of a tab worker said it stopped"
 "$D" show --run smoke --dispatch d_tab | jq -e '.status != "stopped"' >/dev/null || fail "a tab worker was marked stopped"
 
+# Settlement is safe to re-run. For a fake workspace (fk-*) the shim makes `herdr worktree remove`
+# kill the command that called it (a crash between settle and release), fail as dirty, or remove.
+WR="$XDG_STATE_HOME/wt-remove" WTS="$XDG_STATE_HOME/wt"
+cat >"$XDG_STATE_HOME/bin/herdr" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2" = "agent get" ] && [ -f "$FA/\$3" ]; then cat "$FA/\$3"; exit 0; fi
+if [ "\$1 \$2 \$3" = "worktree remove --workspace" ] && [ "\${4#fk-}" != "\$4" ]; then
+  case "\$(cat "$WR")" in
+    crash) kill -KILL -- -"\$(ps -o pgid= -p \$\$ | tr -d ' ')" ;;
+    dirty) echo '{"error":{"code":"dirty_worktree_requires_force","message":"dirty"}}'; exit 1 ;;
+    *) rm -rf "$WTS/\$4"; echo '{"result":{}}'; exit 0 ;;
+  esac
+fi
+exec $(printf %q "$(command -v herdr)") "\$@"
+EOF
+fakews() {  # <dispatch> <agent> <status> [extra json]
+  local x=${4:-}; [ -n "$x" ] || x="{}"
+  mkdir -p "$WTS/fk-$2"
+  jq --arg d "$1" --arg a "$2" --arg s "$3" --arg wt "$WTS/fk-$2" --argjson x "$x" \
+    '. + [{dispatch: $d, attempt: 1, status: $s, agent: $a, workspace_id: ("fk-" + $a), worktree: $wt, after: [], launch: {}} + $x]' \
+    "$L" >"$L.new" && mv "$L.new" "$L"
+}
+crash() { echo crash >"$WR"; ! (PATH="$XDG_STATE_HOME/bin:$PATH" setsid -w "$D" "$@" >/dev/null 2>&1; exit $?) 2>/dev/null; }
+dsp() { PATH="$XDG_STATE_HOME/bin:$PATH" "$D" "$@"; }
+row() { "$D" ps --run smoke --json | jq -c --arg d "$1" '.[] | select(.dispatch == $d)'; }
+acked() { "$D" read --run smoke --id "$1" >/dev/null && ! "$(dirname "$D")/mail.sh" read --inbox "$ST/runs/smoke/inbox.jsonl" --unacked | jq -e --arg i "$1" 'select(.id == $i)' >/dev/null; }
+
+# A crash after the ledger settled and before release: ps names the re-run, which releases and acks.
+fakews d_crash crasher working
+CD=$("$D" report --run smoke --from crasher --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+crash ack --run smoke --id "$CD" --decision release || fail "the crash shim did not crash ack"
+"$D" show --run smoke --dispatch d_crash | jq -e --arg i "$CD" '.status == "settled" and .settled_by == $i and .released == null' >/dev/null || fail "crash state: $("$D" show --run smoke --dispatch d_crash)"
+acked "$CD" && fail "the crashed ack acked the mail"
+row d_crash | jq -e --arg i "$CD" '.attention == "unreleased" and (.next | test("ack --id " + $i + " --decision release"))' >/dev/null || fail "ps does not name the re-run: $(row d_crash)"
+SETTLED_AT=$("$D" show --run smoke --dispatch d_crash | jq -r .settled)
+dsp ack --run smoke --id "$CD" --decision retain --reason r --until u >/dev/null 2>&1 && fail "a re-run changed the decision"
+echo ok >"$WR"
+dsp ack --run smoke --id "$CD" --decision release 2>/dev/null | jq -e '.dispatch == "d_crash" and .decision == "release"' >/dev/null || fail "re-run of ack"
+"$D" show --run smoke --dispatch d_crash | jq -e --arg s "$SETTLED_AT" '.released != null and .settled == $s' >/dev/null || fail "the re-run did not release"
+[ ! -d "$WTS/fk-crasher" ] || fail "the re-run left the worktree"
+acked "$CD" || fail "the re-run did not ack the mail"
+row d_crash | jq -e '.attention != "unreleased"' >/dev/null || fail "ps still flags a released attempt"
+
+# A dirty worktree: ps shows the force command until the worktree is gone, and a re-run records it.
+fakews d_dirty dirtier working
+DD=$("$D" report --run smoke --from dirtier --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+echo dirty >"$WR"; dsp ack --run smoke --id "$DD" --decision release >/dev/null 2>&1 || fail "ack with a dirty worktree"
+row d_dirty | jq -e '.attention == "unreleased" and .release_error == "dirty_worktree_requires_force"
+  and (.next | test("--workspace fk-dirtier --force"))' >/dev/null || fail "ps does not show a dirty worktree: $(row d_dirty)"
+rm -rf "$WTS/fk-dirtier"
+dsp ack --run smoke --id "$DD" --decision release >/dev/null 2>&1 || fail "re-run after a forced remove"
+"$D" show --run smoke --dispatch d_dirty | jq -e '.released != null and .release_error == null' >/dev/null || fail "a removed worktree was not recorded as released"
+
+# An entry that an older version settled has no settled_by: the re-run still finds it.
+LD=$("$D" report --run smoke --from legacy --type worker_done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+fakews d_legacy legacy settled '{"outcome": "succeeded", "decision": "release", "settled": "2999-01-01T00:00:00Z"}'
+row d_legacy | jq -e --arg i "$LD" '.attention == "unreleased" and (.next | test("ack --id " + $i))' >/dev/null || fail "ps on an old unreleased entry: $(row d_legacy)"
+echo ok >"$WR"; dsp ack --run smoke --id "$LD" --decision release 2>/dev/null | jq -e '.dispatch == "d_legacy"' >/dev/null || fail "re-run on an old entry"
+"$D" show --run smoke --dispatch d_legacy | jq -e '.released != null' >/dev/null || fail "an old entry was not released"
+
+# Stop has the same shape: a crash after marking stopped is finished by stop again.
+fakews d_stop stopper working
+crash stop --run smoke --dispatch d_stop || fail "the crash shim did not crash stop"
+row d_stop | jq -e '.status == "stopped" and .attention == "unreleased" and (.next | test("stop --dispatch d_stop"))' >/dev/null || fail "ps on a stopped, unreleased entry: $(row d_stop)"
+STOPPED_AT=$("$D" show --run smoke --dispatch d_stop | jq -r .settled)
+echo ok >"$WR"; dsp stop --run smoke --dispatch d_stop >/dev/null || fail "re-run of stop"
+"$D" show --run smoke --dispatch d_stop | jq -e --arg s "$STOPPED_AT" '.released != null and .settled == $s' >/dev/null || fail "re-run of stop did not release"
+
 echo "smoke ok"

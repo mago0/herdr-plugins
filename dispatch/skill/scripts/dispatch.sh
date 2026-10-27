@@ -251,9 +251,12 @@ record_session() {  # <dispatch>
 }
 
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
+# Safe to run again: a worktree that is already gone is recorded as released.
 release_worker() {
-  local agent=$1 D=$2 ws out E
+  local agent=$1 D=$2 ws out E wt
   E=$(entry "$D")
+  [ "$(jq -r '.released // empty' <<<"$E")" = "" ] || return 0
+  wt=$(jq -r '.worktree // empty' <<<"$E")
   # A worker that an older version placed as a tab shares its supervisor's workspace, so the
   # workspace must not be removed for it.
   if [ "$(jq -r '.placement // "workspace"' <<<"$E")" = tab ]; then
@@ -263,16 +266,22 @@ release_worker() {
     return 0
   fi
   ws=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.workspace_id // empty' || true)
-  [ -n "$ws" ] || ws=$(entry "$D" | jq -r '.workspace_id // empty')
-  [ -n "$ws" ] || { echo "dispatch.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0; }
-  if out=$(herdr worktree remove --workspace "$ws" 2>&1); then
-    ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .released = $ts else . end)'
-    close_idle_parent "$(jq -r '.launch.repo // empty' <<<"$E")"
-    clear_claude_tmp "$(jq -r '.worktree // empty' <<<"$E")"
-  else
+  [ -n "$ws" ] || ws=$(jq -r '.workspace_id // empty' <<<"$E")
+  if [ -n "$wt" ] && [ ! -d "$wt" ]; then
+    out=
+  elif [ -z "$ws" ]; then
+    echo "dispatch.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0
+  elif ! out=$(herdr worktree remove --workspace "$ws" 2>&1); then
     echo "dispatch.sh: warning: release of $agent failed: $out" >&2
     echo "dispatch.sh: inspect the worktree, then: herdr worktree remove --workspace $ws --force" >&2
+    # ps shows the failure until the worktree is gone.
+    ledger_mod --arg d "$D" --arg err "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)" \
+      'map(if .dispatch == $d then .release_error = (if $err == "" then "release failed" else $err end) else . end)'
+    return 0
   fi
+  ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .released = $ts | del(.release_error) else . end)'
+  close_idle_parent "$(jq -r '.launch.repo // empty' <<<"$E")"
+  clear_claude_tmp "$wt"
 }
 
 case "$CMD" in
@@ -368,15 +377,30 @@ case "$CMD" in
         [ -z "$UNTIL" ] || die "--until is the release condition of a retain or reuse"
       fi
       OUTCOME=$(jq -r '.outcome // "unspecified"' <<<"$MSG")
-      D=$(jq -r --arg a "$FROM" '[.[] | select(.agent == $a and .status == "working")] | last | .dispatch // empty' "$LEDGER")
-      if [ -n "$D" ]; then
+      # A re-run after a crash finds the entry this message already settled and finishes its steps.
+      # An entry that an older version settled has no settled_by: it is the agent's settled release
+      # that is not released and was settled after the message was sent.
+      SETTLED=$(jq -r --arg id "$ID" --arg a "$FROM" --arg t "$(jq -r .ts <<<"$MSG")" '
+        ([.[] | select(.settled_by == $id)] | last | .dispatch)
+        // ([.[] | select(.agent == $a and .status == "settled" and .settled_by == null and .decision == "release"
+                          and .released == null and (.settled // "") >= $t)] | last | .dispatch) // empty' "$LEDGER")
+      if [ -n "$SETTLED" ]; then
+        D=$SETTLED; E=$(entry "$D")
+        PREV=$(jq -r .decision <<<"$E"); OUTCOME=$(jq -r '.outcome // "unspecified"' <<<"$E")
+        [ "$PREV" = "$DECISION" ] || die "$ID already settled $D with --decision $PREV; re-run with that decision"
+        REASON=$(jq -r '.decision_reason // ""' <<<"$E"); UNTIL=$(jq -r '.release_when // ""' <<<"$E")
+        [ "$DECISION" != release ] || release_worker "$FROM" "$D"
+      else
+        D=$(jq -r --arg a "$FROM" '[.[] | select(.agent == $a and .status == "working")] | last | .dispatch // empty' "$LEDGER")
+      fi
+      if [ -n "$D" ] && [ -z "$SETTLED" ]; then
         record_session "$D"
-        ledger_mod --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" --arg ts "$(now)" --arg why "$REASON" --arg until "$UNTIL" \
-          'map(if .dispatch == $d then .status = "settled" | .outcome = $o | .decision = $dec | .settled = $ts
+        ledger_mod --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" --arg ts "$(now)" --arg why "$REASON" --arg until "$UNTIL" --arg id "$ID" \
+          'map(if .dispatch == $d then .status = "settled" | .outcome = $o | .decision = $dec | .settled = $ts | .settled_by = $id
                | .decision_reason = (if $why == "" then null else $why end)
                | .release_when = (if $until == "" then null else $until end) else . end)'
         [ "$DECISION" != release ] || release_worker "$FROM" "$D"
-      else
+      elif [ -z "$D" ]; then
         echo "dispatch.sh: warning: no working dispatch for agent $FROM; acked without settlement" >&2
       fi
     fi
@@ -425,7 +449,12 @@ case "$CMD" in
       ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent | if . == null then "missing" elif .stalled_secs then "stalled" else .agent_status end' || echo missing)
       AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
     done
-    ROWS=$(jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" '
+    # Attempts that were to be released and still have a worktree: a release that failed or never ran.
+    LEFT=$(jq -r '.[] | select(.released == null and .worktree != null
+        and ((.status == "settled" and .decision == "release") or .status == "stopped")) | [.dispatch, .worktree] | @tsv' "$LEDGER" \
+      | while IFS=$'\t' read -r DD WT; do [ ! -d "$WT" ] || echo "$DD"; done | jq -R . | jq -sc .)
+    DONES=$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -sc 'map({id, from, ts})')
+    ROWS=$(jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson dones "$DONES" '
       (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
       | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
       | .[]
@@ -443,6 +472,7 @@ case "$CMD" in
       | (($e.after // []) | map(select(. as $a | $bad | any(. == $a)))) as $failed_deps
       | (($e.after // []) | map(select(. as $a | $ok | any(. == $a) | not))) as $unmet
       | (if $e.status == "pending" then (if ($failed_deps | length) > 0 then "dep failed" elif ($unmet | length) > 0 then "waiting deps" else "ready" end)
+         elif ($left | index($e.dispatch)) != null then "unreleased"
          elif ($mine | any(.type == "escalation")) then "escalation"
          elif ($mine | any(.type == "worker_done")) then "worker_done"
          elif ($mine | any(.type == "question")) then "question"
@@ -453,7 +483,15 @@ case "$CMD" in
          elif ($mine | any(.type == "status")) then "status"
          else "none" end) as $att
       | (($mine | map(select(.type == $att)) | first | .id) // "") as $mid
-      | (if $att == "escalation" then "tell the user; \($mail) read --id \($mid)"
+      | ($e.settled_by // ($dones | map(select(.from == $e.agent and .ts <= ($e.settled // ""))) | last | .id)) as $done_id
+      | (if $e.status == "stopped" then "\($mail) stop --dispatch \($e.dispatch)"
+         elif $done_id != null then "\($mail) ack --id \($done_id) --decision release"
+         else "herdr worktree remove --workspace \($e.workspace_id)" end) as $finish
+      | (if $att == "unreleased" then
+           (if ($e.placement // "") == "tab" then "close its tab by hand (herdr agent get \($e.agent)), then git worktree remove \($e.worktree)"
+            elif $e.release_error != null then "release failed (\($e.release_error)): look at what is dirty in \($e.worktree), then herdr worktree remove --workspace \($e.workspace_id) --force; then \($finish)"
+            else $finish end)
+         elif $att == "escalation" then "tell the user; \($mail) read --id \($mid)"
          elif $att == "worker_done" then "\($mail) ack --id \($mid) --decision reuse|retain|release"
          elif $att == "question" then "\($mail) reply --id \($mid) --body ..."
          elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
@@ -469,7 +507,8 @@ case "$CMD" in
          else "\($mail) wait" end) as $next
       | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
          liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
-         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript}' "$LEDGER")
+         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript,
+         released: $e.released, release_error: $e.release_error}' "$LEDGER")
     if [ "$JSON" = 1 ]; then jq -s . <<<"$ROWS"; else
       { printf 'DISPATCH\tAGENT\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
         jq -r '[.dispatch, .agent, .status, .outcome, .liveness, .attention, .next] | @tsv' <<<"$ROWS"; } | column -t -s $'\t'
@@ -502,7 +541,9 @@ case "$CMD" in
     fi
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
     record_session "$D"
-    ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" 'map(if .dispatch == $d then .status = $s | .settled = $ts else . end)'
+    # A re-run of stop keeps the first stop time and finishes the release.
+    ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" \
+      'map(if .dispatch == $d then .settled = (if .status == $s then .settled // $ts else $ts end) | .status = $s else . end)'
     # An attempt that is closed sends no more reports.
     [ -z "$AGENT" ] || supervise "$AGENT"
     [ "$CMD" != stop ] || [ -z "$AGENT" ] || release_worker "$AGENT" "$D"

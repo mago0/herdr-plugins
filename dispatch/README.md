@@ -58,7 +58,7 @@ Other lines it can receive:
 
 The `HERDR` lines come from the server, through the supervision link that `dispatch.sh start` makes.
 
-`dispatch.sh ps` shows every attempt with its liveness and the next command to run.
+`dispatch.sh ps` shows every attempt with its liveness and the next command to run. That includes an attempt that was to be released and still has its worktree, because the release failed or the command died first. Settling again finishes it.
 
 ## Install
 

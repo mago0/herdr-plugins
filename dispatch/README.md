@@ -72,7 +72,7 @@ Keep the skill symlinked to the installed plugin and do not copy it, so that the
 
 Requirements:
 
-- A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later)
+- A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later), and with `agent resume` and `agent start --prompt-file` (the fork's agent launch, see its `FORK.md`). On a Herdr without agent resume, `start` and `resume` stop with a message that says so, before a worktree opens.
 - `bash`, `jq`, `flock`, `git`; `inotifywait` for an event-driven `dispatch.sh wait` (falls back to polling)
 
 `dispatch.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor, and records their sessions.
@@ -97,7 +97,7 @@ The same news is not delivered twice in a row, so the command needs no bookkeepi
 
 - `stalled` finds a frozen agent. An agent that still animates while it waits on a tool that never returns is not found.
 - Wake delivery was tested with Claude Code. Other agent kinds queue typed input in their own way.
-- `dispatch.sh resume` knows Claude Code, Codex and pi. Other kinds, omp among them, start again from the task with `retry`. A resumed agent cannot know whether its last tool call finished, so it is told to check before it goes on.
+- `dispatch.sh resume` uses Herdr's resume command for the session's kind, so it covers every kind Herdr can resume: claude, codex, copilot, devin, droid, kimi, mastracode, pi, omp, hermes, opencode, qodercli, qwen, kilo, cursor, agy, grok and letta. Other kinds start again from the task with `retry`. A resumed agent cannot know whether its last tool call finished, so it is told to check before it goes on.
 - Herdr events are kept in memory. `herdr events read` reports `lost` for a cursor that is too old or from before a restart, and `dispatch.sh ps` is the reconcile path.
 
 ## How it is built
@@ -119,4 +119,4 @@ Diagrams of version 0.1.0, as standalone HTML to open locally: `docs/overview.ht
 test/smoke.sh
 ```
 
-Runs every `dispatch.sh` command that needs no live agent against a throwaway state directory. It needs a running Herdr server with delivery queues.
+Runs every `dispatch.sh` command that needs no live agent against a throwaway state directory. It needs a running Herdr server with delivery queues. A shim stands in for Herdr's agent start and agent resume, as a server with them and as one without.

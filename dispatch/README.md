@@ -75,7 +75,7 @@ Requirements:
 - A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later)
 - `bash`, `jq`, `flock`, `git`; `inotifywait` for an event-driven `dispatch.sh wait` (falls back to polling)
 
-`dispatch.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor.
+`dispatch.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor, and records their sessions.
 
 ## Row labels
 
@@ -105,7 +105,7 @@ A skill (`skill/`): `SKILL.md`, the reference agents read, and the scripts they 
 
 State is under `${XDG_STATE_HOME:-~/.local/state}/agent-dispatch/`:
 
-- `runs/<run>/ledger.json`: dispatch attempts
+- `runs/<run>/ledger.json`: dispatch attempts, each with its agent's session and transcript path, and the reason for a retain or reuse
 - `runs/<run>/inbox.jsonl`: worker to supervisor mail
 - `runs/<run>/workers/<agent>/inbox.jsonl`: supervisor to worker mail
 - `runs/<run>/supervisor`: the pane that gets the run's wake lines

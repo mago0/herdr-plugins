@@ -71,6 +71,41 @@ KD=$("$D" report --run smoke --from keeper --type worker_done --outcome succeede
 SD=$("$D" report --run smoke --from keeper --type status --subject s | jq -r .sent)
 "$D" ack --run smoke --id "$SD" --reason r 2>/dev/null && fail "--reason on a status ack"
 
+# An attempt keeps Herdr's session reference of its agent, and the transcript file only when that
+# file exists. A shim answers `herdr agent get` for fake panes and passes every other call on.
+FA="$XDG_STATE_HOME/fake-agents"; mkdir -p "$FA" "$XDG_STATE_HOME/bin"
+printf '#!/usr/bin/env bash\nif [ "$1 $2" = "agent get" ] && [ -f "%s/$3" ]; then cat "%s/$3"; exit 0; fi\nexec %q "$@"\n' \
+  "$FA" "$FA" "$(command -v herdr)" >"$XDG_STATE_HOME/bin/herdr"
+chmod +x "$XDG_STATE_HOME/bin/herdr"
+export CLAUDE_CONFIG_DIR="$XDG_STATE_HOME/claude" CODEX_HOME="$XDG_STATE_HOME/codex"
+mkdir -p "$CLAUDE_CONFIG_DIR/projects/-wt" "$CODEX_HOME/sessions/2026/10/21" "$XDG_STATE_HOME/pi"
+CT="$CLAUDE_CONFIG_DIR/projects/-wt/11111111-2222-3333-4444-555555555555.jsonl"; touch "$CT"
+XT="$CODEX_HOME/sessions/2026/10/21/rollout-2026-10-21T22-36-36-aaaa-bbbb.jsonl"; touch "$XT"
+PT="$XDG_STATE_HOME/pi/s.jsonl"; touch "$PT"
+fake() {  # <pane> <name> <agent> <kind> <value>
+  jq -cn --arg n "$2" --arg p "$1" --arg a "$3" --arg k "$4" --arg v "$5" \
+    '{result: {agent: {name: $n, pane_id: $p, agent: $a, agent_session: {agent: $a, kind: $k, source: ("herdr:" + $a), value: $v}}}}' >"$FA/$1"
+  jq --arg d "d_s_$2" --arg n "$2" --arg p "$1" '. + [{dispatch: $d, attempt: 1, status: "working", agent: $n, pane_id: $p, after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+}
+fake fk:1 s-claude claude id 11111111-2222-3333-4444-555555555555
+fake fk:2 s-codex codex id aaaa-bbbb
+fake fk:3 s-pi pi path "$PT"
+fake fk:4 s-cursor cursor id 11111111-2222-3333-4444-555555555555
+fake fk:5 s-gone claude id 99999999-0000-0000-0000-000000000000
+fake fk:6 s-moved claude id 11111111-2222-3333-4444-555555555555
+jq '.result.agent.name = "someone-else"' "$FA/fk:6" >"$FA/x" && mv "$FA/x" "$FA/fk:6"
+for n in claude codex pi cursor gone moved; do PATH="$XDG_STATE_HOME/bin:$PATH" "$D" abandon --run smoke --dispatch "d_s_s-$n" >/dev/null || fail "abandon s-$n"; done
+tr_of() { "$D" show --run smoke --dispatch "d_s_s-$1" | jq -r '.transcript // ""'; }
+[ "$(tr_of claude)" = "$CT" ] || fail "claude transcript"
+[ "$(tr_of codex)" = "$XT" ] || fail "codex transcript"
+[ "$(tr_of pi)" = "$PT" ] || fail "pi transcript"
+[ -z "$(tr_of cursor)" ] || fail "a kind with no known transcript got one"
+"$D" show --run smoke --dispatch d_s_s-cursor | jq -e '.session.value == "11111111-2222-3333-4444-555555555555"' >/dev/null || fail "session reference not kept"
+[ -z "$(tr_of gone)" ] || fail "a transcript that does not exist was recorded"
+"$D" show --run smoke --dispatch d_s_s-moved | jq -e '.session == null' >/dev/null || fail "a session of another agent was recorded"
+"$D" ps --run smoke --json | jq -e --arg t "$CT" '.[] | select(.dispatch == "d_s_s-claude") | .transcript == $t' >/dev/null || fail "ps has no transcript"
+unset CLAUDE_CONFIG_DIR CODEX_HOME
+
 # A worker that an older version placed as a tab shares its supervisor's workspace: release
 # must not remove that workspace.
 jq '. + [{dispatch: "d_tab", attempt: 1, status: "working", agent: "tabbed", placement: "tab", tab_id: "w-none:t9",

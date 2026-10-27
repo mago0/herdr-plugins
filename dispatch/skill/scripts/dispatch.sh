@@ -20,13 +20,13 @@
 #   dispatch.sh retry   --dispatch <d>                           new attempt of the same task; old attempt abandoned
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
-#   dispatch.sh show    --dispatch <d> | list
+#   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
 #   dispatch.sh report  --from <agent> --type <t> --subject <s> [--body <text> | --body-file <f>] [--outcome <o>]
 #                       worker side: mail the supervisor, and wake it for the run's wake types
 #   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
 #                       type one line into the supervisor (or --to) from any process; exit 3 = no such agent
 #   dispatch.sh adopt                                            link the live workers of every run to their
-#                       supervisor in Herdr and label them; for runs started before Herdr kept the links
+#                       supervisor in Herdr, label them and record their sessions; for runs started before Herdr kept the links
 #
 # Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
 # Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
@@ -167,6 +167,7 @@ launch_dispatch() {
           workspace_id: $r.workspace_id, pane_id: $r.pane_id, worktree: $r.worktree, branch: $r.branch,
           prompt_file: $r.task_file, worker_inbox: $r.worker_inbox, agent_status: $r.status} else . end)'
   local ag pane; ag=$(jq -r .agent <<<"$receipt"); pane=$(jq -r '.pane_id // empty' <<<"$receipt")
+  [ "$ls" != working ] || record_session "$D"
   label_pane "$pane" "$(jq -r '.label // ""' <<<"$spec")"
   link_pane "$pane" "$(jq -r '.link // ""' <<<"$spec")"
   # A fast worker can report worker_done before the launcher returns; it then gets no reports.
@@ -212,6 +213,41 @@ clear_claude_tmp() {
   dir="${CLAUDE_CODE_TMPDIR:-/tmp}/claude-$(id -u)/$(printf '%s' "$wt" | sed 's/[^A-Za-z0-9]/-/g')"
   [ -d "$dir" ] && rm -rf -- "$dir"
   return 0
+}
+
+# The transcript file a Herdr session reference names, or nothing. Only a file that exists counts:
+# no pointer is fine, a wrong one is not.
+transcript_of() {  # <agent_session json>
+  local agent kind val f=() d x
+  agent=$(jq -r '.agent // ""' <<<"$1"); kind=$(jq -r '.kind // ""' <<<"$1"); val=$(jq -r '.value // ""' <<<"$1")
+  case "$agent:$kind" in
+    pi:path|omp:path) case "$val" in /*) [ -f "$val" ] && printf '%s' "$val" ;; esac; return 0 ;;
+  esac
+  # An id names one file by itself, so it is safe to glob for when it holds no glob characters.
+  case "$val" in ""|*[!A-Za-z0-9-]*) return 0 ;; esac
+  [ "$kind" = id ] || return 0
+  case "$agent" in
+    claude) d="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"; for x in "$d"/*/"$val".jsonl; do [ -f "$x" ] && f+=("$x"); done ;;
+    codex) d="${CODEX_HOME:-$HOME/.codex}/sessions"; for x in "$d"/*/*/*/rollout-*-"$val".jsonl; do [ -f "$x" ] && f+=("$x"); done ;;
+  esac
+  [ ${#f[@]} -ne 1 ] || printf '%s' "${f[0]}"
+}
+
+# Record Herdr's session reference of an attempt's agent, and its transcript, on the attempt.
+# The transcript outlives release, so `show` leads to it later.
+record_session() {  # <dispatch>
+  local E agent pane info ref tr
+  E=$(entry "$1"); agent=$(jq -r '.agent // empty' <<<"$E"); pane=$(jq -r '.pane_id // empty' <<<"$E")
+  [ -n "$agent" ] && [ -n "$pane" ] || return 0
+  info=$(herdr agent get "$pane" 2>/dev/null) || return 0
+  # The pane must still hold this attempt's agent.
+  [ "$(jq -r '.result.agent.name // empty' <<<"$info" 2>/dev/null)" = "$agent" ] || return 0
+  ref=$(jq -c '.result.agent.agent_session // empty' <<<"$info" 2>/dev/null) || return 0
+  [ -n "$ref" ] || return 0
+  tr=$(transcript_of "$ref")
+  ledger_mod --arg d "$1" --argjson ref "$ref" --arg tr "$tr" 'map(if .dispatch == $d then
+      .transcript = (if $tr != "" then $tr elif .session.value == $ref.value then .transcript else null end)
+      | .session = $ref else . end)'
 }
 
 # Release = post-settlement cleanup: removes the worktree, which also kills a live agent.
@@ -334,6 +370,7 @@ case "$CMD" in
       OUTCOME=$(jq -r '.outcome // "unspecified"' <<<"$MSG")
       D=$(jq -r --arg a "$FROM" '[.[] | select(.agent == $a and .status == "working")] | last | .dispatch // empty' "$LEDGER")
       if [ -n "$D" ]; then
+        record_session "$D"
         ledger_mod --arg d "$D" --arg o "$OUTCOME" --arg dec "$DECISION" --arg ts "$(now)" --arg why "$REASON" --arg until "$UNTIL" \
           'map(if .dispatch == $d then .status = "settled" | .outcome = $o | .decision = $dec | .settled = $ts
                | .decision_reason = (if $why == "" then null else $why end)
@@ -432,7 +469,7 @@ case "$CMD" in
          else "\($mail) wait" end) as $next
       | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
          liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
-         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when}' "$LEDGER")
+         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript}' "$LEDGER")
     if [ "$JSON" = 1 ]; then jq -s . <<<"$ROWS"; else
       { printf 'DISPATCH\tAGENT\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
         jq -r '[.dispatch, .agent, .status, .outcome, .liveness, .attention, .next] | @tsv' <<<"$ROWS"; } | column -t -s $'\t'
@@ -448,6 +485,7 @@ case "$CMD" in
       status: "pending", outcome: null, decision: null, created: $ts, started: null, settled: null, agent: null, launch: .launch}' <<<"$OLD")
     # The attempt that is replaced sends no more reports.
     OLD_AGENT=$(jq -r '.agent // empty' <<<"$OLD"); [ -z "$OLD_AGENT" ] || supervise "$OLD_AGENT"
+    record_session "$D"
     ledger_mod --arg d "$D" --argjson n "$NEW" 'map(if .dispatch == $d and .status != "settled" then .status = "abandoned" else . end) + [$n]'
     if deps_met "$N"; then launch_dispatch "$N"; else jq -cn --arg d "$N" '{dispatch: $d, status: "pending"}'; fi
     ;;
@@ -463,6 +501,7 @@ case "$CMD" in
       die "stop: $AGENT was placed as a tab by an older version. Close its tab by hand, then run: dispatch.sh abandon --dispatch $D"
     fi
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
+    record_session "$D"
     ledger_mod --arg d "$D" --arg s "$NEWST" --arg ts "$(now)" 'map(if .dispatch == $d then .status = $s | .settled = $ts else . end)'
     # An attempt that is closed sends no more reports.
     [ -z "$AGENT" ] || supervise "$AGENT"
@@ -493,7 +532,7 @@ case "$CMD" in
       [ -f "$LEDGER" ] || continue
       RUN_DIR=$(dirname "$LEDGER"); RUN=$(basename "$RUN_DIR"); SUP=$(supervisor)
       herdr pane get "$SUP" >/dev/null 2>&1 || continue
-      while IFS=$'\t' read -r AGENT STATUS LEDGER_PANE STARTED; do
+      while IFS=$'\t' read -r DISP AGENT STATUS LEDGER_PANE STARTED; do
         PANE=$(herdr agent get "$AGENT" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
         # The name must still be on the pane the ledger has. A later run can own the name now.
         [ -n "$PANE" ] && [ "$PANE" = "$LEDGER_PANE" ] && [ "$PANE" != "$SUP" ] || continue
@@ -501,10 +540,11 @@ case "$CMD" in
         # An earlier attempt can have had the same name, so only mail since this one started counts.
         DONE=$(jq -c --arg a "$AGENT" --arg t "$STARTED" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1 || true)
         if [ "$STATUS" = working ] && [ -z "$DONE" ]; then supervise "$PANE" "$REPORTS"; else supervise "$PANE"; fi
+        record_session "$DISP"
         KEY=$(ticket_of "$AGENT"); [ -n "$KEY" ] || KEY=$(ticket_of "$RUN")
         [ -z "$KEY" ] || [ -n "$(herdr pane get "$PANE" | jq -r '.result.pane.tokens.label // empty')" ] || label_pane "$PANE" "$KEY"
         N=$((N + 1))
-      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.agent, .status, (.pane_id // "-"), (.started // "")] | @tsv' "$LEDGER")
+      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.dispatch, .agent, .status, (.pane_id // "-"), (.started // "")] | @tsv' "$LEDGER")
     done
     jq -cn --argjson n "$N" '{adopted: $n}'
     ;;

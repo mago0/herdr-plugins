@@ -14,6 +14,8 @@
 # Types: status question escalation worker_done reply followup
 # Delivery is ack-based: `read --unacked`, `wait`, and `watch` see a message until someone acks it,
 # so a message sent while no reader ran, or read by a reader that then died, is still delivered.
+# Writers append under an exclusive lock on <inbox>.lock and readers read under a shared one, so no
+# reader sees half a message. Readers skip a line that does not parse.
 set -euo pipefail
 
 CMD=${1:-}; shift || true
@@ -33,16 +35,23 @@ done
 [ -n "$INBOX" ] || { echo "mail.sh: --inbox is required" >&2; exit 2; }
 ACKED="$INBOX.acked"
 
+# The inbox as it is between appends: the shared lock waits out a writer that is appending.
+# touch opens the file for writing, which would wake a wait, so it runs only for a missing inbox.
+snapshot() { [ -e "$INBOX" ] || touch "$INBOX"; { flock -s 9; cat "$INBOX"; } 9>>"$INBOX.lock"; }
+# For jq -nR: each message of the raw inbox lines. A line that does not parse, such as one a
+# writer left half done when it died, is skipped.
+MSGS='def msgs: inputs | fromjson? | objects;'
+
 # Un-acked messages, optionally filtered to a comma-separated type list, as JSON lines.
 unacked() {
-  touch "$INBOX" "$ACKED"
+  touch "$ACKED"
   # -n with inputs builds the acked set once, so a lookup per message is a key lookup.
-  jq -nc --rawfile acked "$ACKED" --arg types "$TYPES" '
+  snapshot | jq -nRc --rawfile acked "$ACKED" --arg types "$TYPES" "$MSGS"'
     ($acked | split("\n") | map(select(length > 0) | {key: ., value: true}) | from_entries) as $a
     | ($types | if . == "" then [] else split(",") end) as $t
-    | inputs
+    | msgs
     | select((.id | type) != "string" or ($a[.id] | not))
-    | select(($t | length) == 0 or (.type as $ty | $t | any(. == $ty)))' "$INBOX"
+    | select(($t | length) == 0 or (.type as $ty | $t | any(. == $ty)))'
 }
 mail_line() { jq -r '"MAIL|\(.id)|\(.type)|\(.from)|\(.subject | gsub("[\n|]"; " "))"'; }
 
@@ -64,24 +73,27 @@ case "$CMD" in
     # Lock: bodies can exceed the size the kernel appends atomically, and the repeat check must see
     # every append and ack before it.
     { flock 9
-      DUP=$(jq -nc --rawfile acked "$ACKED" --argjson m "$LINE" --arg since "$SINCE" '
+      DUP=$(jq -nRc --rawfile acked "$ACKED" --argjson m "$LINE" --arg since "$SINCE" "$MSGS"'
         ($acked | split("\n") | map(select(length > 0) | {key: ., value: true}) | from_entries) as $a
-        | first(inputs | select(.from == $m.from)
+        | first(msgs | select(.from == $m.from)
             | if $m.key != null then select(.key == $m.key and (($a[.id] | not) or .ts >= $since))
               else select(($a[.id] | not) and .type == $m.type and .subject == $m.subject and .body == $m.body
                           and .outcome == $m.outcome and .reply_to == $m.reply_to) end)
           | {sent: .id, duplicate: true, acked: ($a[.id] != null)}' "$INBOX" 2>/dev/null || true)
       if [ -n "$DUP" ]; then printf '%s\n' "$DUP"
-      else printf '%s\n' "$LINE" >>"$INBOX"; jq -c '{sent: .id}' <<<"$LINE"; fi
+      else
+        # A writer that died mid-line left no newline; this message starts a line of its own.
+        [ -z "$(tail -c1 "$INBOX")" ] || printf '\n' >>"$INBOX"
+        printf '%s\n' "$LINE" >>"$INBOX"; jq -c '{sent: .id}' <<<"$LINE"
+      fi
     } 9>"$INBOX.lock"
     ;;
   read)
-    touch "$INBOX"
     if [ ${#IDS[@]} -gt 0 ]; then
-      for ID in "${IDS[@]}"; do jq -c --arg id "$ID" 'select(.id == $id)' "$INBOX"; done
+      snapshot | jq -nRc --args "$MSGS"'$ARGS.positional as $ids | msgs | . as $m | select($ids | any(. == $m.id))' "${IDS[@]}"
     elif [ "$UNACKED" = 1 ]; then unacked
-    elif [ -n "$TYPES" ]; then jq -c --arg types "$TYPES" '($types | split(",")) as $t | select(.type as $ty | $t | any(. == $ty))' "$INBOX"
-    else jq -c . "$INBOX"; fi
+    elif [ -n "$TYPES" ]; then snapshot | jq -nRc --arg types "$TYPES" "$MSGS"'($types | split(",")) as $t | msgs | select(.type as $ty | $t | any(. == $ty))'
+    else snapshot | jq -nRc "$MSGS msgs"; fi
     ;;
   ack)
     [ ${#IDS[@]} -gt 0 ] || { echo "mail.sh: ack needs --id" >&2; exit 2; }
@@ -102,7 +114,7 @@ case "$CMD" in
         sleep "$INTERVAL" & W=$!
       fi
       OUT=$(unacked | mail_line)
-      if [ -n "$OUT" ]; then kill "$W" 2>/dev/null; wait "$W" 2>/dev/null || true; printf '%s\n' "$OUT"; exit 0; fi
+      if [ -n "$OUT" ]; then kill "$W" 2>/dev/null || true; wait "$W" 2>/dev/null || true; printf '%s\n' "$OUT"; exit 0; fi
       wait "$W" 2>/dev/null || true
     done
     ;;

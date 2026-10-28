@@ -28,6 +28,20 @@ for s in a b c d; do "$M" send --inbox "$MB" --from w --type status --subject "$
 "$M" ack --inbox "$MB" --id "$(jq -r 'select(.subject == "b") | .id' "$MB")" --id "$(jq -r 'select(.subject == "d") | .id' "$MB")" >/dev/null
 [ "$("$M" read --inbox "$MB" --unacked | jq -r .subject | paste -sd,)" = a,c ] || fail "unacked set"
 [ "$("$M" read --inbox "$MB" --unacked --types question | wc -l)" = 0 ] || fail "unacked type filter"
+# A reader never sees half a message. It waits for a writer that holds the lock, and skips a line a
+# writer left half done; the next message starts a line of its own.
+HB="$XDG_STATE_HOME/half.jsonl"
+printf '%s\n' '{"id":"h1","ts":"t","from":"w","type":"status","subject":"a","body":""}' >"$HB"
+( flock 9; printf '%s' '{"id":"h2","ts":"t","from":"w","type":"worker_done",' >>"$HB"; sleep 1
+  printf '%s\n' '"subject":"done","body":""}' >>"$HB" ) 9>"$HB.lock" &
+sleep 0.3
+[ "$("$M" read --inbox "$HB" --types worker_done | jq -r .id)" = h2 ] || fail "a reader did not wait for a writer that holds the lock"
+wait
+printf '%s' '{"id":"h3","ts":"t","from":"w","type":"worker_done","subj' >>"$HB"
+rc=0; "$M" wait --inbox "$HB" --types question --timeout 1 >/dev/null 2>&1 || rc=$?; [ "$rc" = 124 ] || fail "wait on a half line exited $rc"
+[ "$("$M" read --inbox "$HB" --unacked | jq -r .id | paste -sd,)" = h1,h2 ] || fail "unacked with a half line"
+H4=$("$M" send --inbox "$HB" --from w --type status --subject after | jq -r .sent)
+[ "$("$M" read --inbox "$HB" --id "$H4" | jq -r .subject)" = after ] || fail "a message after a half line is not readable"
 rc=0; "$D" notify --to no-such-agent --line "x" || rc=$?; [ "$rc" = 3 ] || fail "notify to a missing agent should exit 3, got $rc"
 rc=0; "$D" notify --run smoke --line "x" || rc=$?; [ "$rc" = 3 ] || fail "notify with no supervisor should exit 3, got $rc"
 "$D" ps --run smoke >/dev/null || fail ps

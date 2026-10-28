@@ -111,6 +111,7 @@ State is under `${XDG_STATE_HOME:-~/.local/state}/agent-dispatch/`:
 - `runs/<run>/ledger.json`: dispatch attempts, each with its agent's session and transcript path, and the reason for a retain or reuse
 - `runs/<run>/inbox.jsonl`: worker to supervisor mail
 - `runs/<run>/workers/<agent>/inbox.jsonl`: supervisor to worker mail
+- `<inbox>.acked` and `<inbox>.lock`: the acked ids, and the lock. Writers append under an exclusive lock and readers read under a shared one, so no reader sees half a message. A line that does not parse is skipped.
 - `runs/<run>/supervisor`: the pane that gets the run's wake lines, set by `dispatch.sh run`
 
 Diagrams of version 0.1.0, as standalone HTML to open locally: `docs/overview.html` and `docs/architecture.html`. They still show the event hook, which Herdr replaced.

@@ -210,7 +210,7 @@ launch_dispatch() {
   label_pane "$pane" "$(jq -r '.label // ""' <<<"$spec")"
   link_pane "$pane" "$(jq -r '.link // ""' <<<"$spec")"
   # A fast worker can report worker_done before the launcher returns; it then gets no reports.
-  if [ "$ls" = working ] && [ -z "$(jq -c --arg a "$ag" --arg t "$t0" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$INBOX")" ]; then
+  if [ "$ls" = working ] && [ -z "$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -c --arg a "$ag" --arg t "$t0" 'select(.from == $a and .ts >= $t)')" ]; then
     supervise "$pane" "$REPORTS"
   else
     supervise "$pane"
@@ -336,7 +336,7 @@ link_workers() {
     [ -n "$pane" ] && [ "$pane" = "$ledger_pane" ] && [ "$pane" != "$sup" ] || continue
     # A worker that said it is done is not watched, also while that mail waits for its ack.
     # An earlier attempt can have had the same name, so only mail since this one started counts.
-    fin=$(jq -c --arg a "$agent" --arg t "$started" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1 || true)
+    fin=$("$MAIL" read --inbox "$RUN_DIR/inbox.jsonl" --types worker_done | jq -c --arg a "$agent" --arg t "$started" 'select(.from == $a and .ts >= $t)' | head -1 || true)
     if [ "$status" = working ] && [ -z "$fin" ]; then supervise "$pane" "$REPORTS"; else supervise "$pane"; fi
     record_session "$disp"
     key=$(ticket_of "$agent"); [ -n "$key" ] || key=$(ticket_of "$RUN")

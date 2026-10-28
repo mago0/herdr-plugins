@@ -77,6 +77,8 @@ Requirements:
 
 `dispatch.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor, and records their sessions.
 
+A supervisor that comes back in a new pane runs `dispatch.sh run --name <run>` again. When the run's supervisor pane is gone, the run moves to the new pane and its live workers are linked to it. `dispatch.sh ps` warns about a gone supervisor pane. A run whose supervisor pane is still open moves only with `--take-over`.
+
 ## Row labels
 
 Herdr shows a label at the right edge of an agent's row in the sidebar tree. Dispatch writes Herdr's well-known `label` and `link` pane tokens under the source `dispatch`. `dispatch.sh start --label SRE-142` sets the label on the worker, and `dispatch.sh run --label SRE-142` on the supervisor. `--link <url>` on either command sets the web address that the tree opens for the row on ctrl+click, such as that of the issue; with no `--link` the row has no link. A name or a run name that starts with an issue key is split: `sre-142-fix-probes` gives the label `SRE-142` and the agent name `fix-probes`.
@@ -109,7 +111,7 @@ State is under `${XDG_STATE_HOME:-~/.local/state}/agent-dispatch/`:
 - `runs/<run>/ledger.json`: dispatch attempts, each with its agent's session and transcript path, and the reason for a retain or reuse
 - `runs/<run>/inbox.jsonl`: worker to supervisor mail
 - `runs/<run>/workers/<agent>/inbox.jsonl`: supervisor to worker mail
-- `runs/<run>/supervisor`: the pane that gets the run's wake lines
+- `runs/<run>/supervisor`: the pane that gets the run's wake lines, set by `dispatch.sh run`
 
 Diagrams of version 0.1.0, as standalone HTML to open locally: `docs/overview.html` and `docs/architecture.html`. They still show the event hook, which Herdr replaced.
 

@@ -2,7 +2,10 @@
 # Supervisor front-end for Herdr dispatch: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
-#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>] [--link <url>]   bind (create or resume) a run; later commands default to it
+#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>] [--link <url>] [--take-over]
+#                       bind (create or resume) a run; later commands default to it. This pane becomes the
+#                       supervisor and the run's live workers are linked to it. A run whose supervisor pane is
+#                       still open moves only with --take-over
 #                       --wake: mail types that wake the supervisor (default question,escalation,worker_done)
 #                       --label: label of the supervisor's row in the sidebar tree, such as an issue key
 #   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
@@ -152,6 +155,11 @@ deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
   esac
 }
 supervisor() { cat "$RUN_DIR/supervisor" 2>/dev/null || true; }
+# The run's supervisor pane when Herdr no longer has it, or nothing.
+gone_supervisor() {
+  local sup; sup=$(supervisor)
+  [ -z "$sup" ] || herdr pane get "$sup" >/dev/null 2>&1 || printf '%s' "$sup"
+}
 notify_supervisor() {  # <prompt line> <toast title> <toast body>
   deliver "$(supervisor)" "$@" || echo "dispatch.sh: note: the supervisor was not woken ($DELIVER_ERROR); the message is in the run inbox" >&2
 }
@@ -316,16 +324,45 @@ release_worker() {
   clear_claude_tmp "$wt"
 }
 
+# Link the live workers of the bound run to its supervisor in Herdr, label them from their names
+# and record their sessions. Prints how many it linked.
+link_workers() {
+  local sup n=0 disp agent status ledger_pane started pane fin key
+  sup=$(supervisor)
+  herdr pane get "$sup" >/dev/null 2>&1 || { echo 0; return 0; }
+  while IFS=$'\t' read -r disp agent status ledger_pane started; do
+    pane=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
+    # The name must still be on the pane the ledger has. A later run can own the name now.
+    [ -n "$pane" ] && [ "$pane" = "$ledger_pane" ] && [ "$pane" != "$sup" ] || continue
+    # A worker that said it is done is not watched, also while that mail waits for its ack.
+    # An earlier attempt can have had the same name, so only mail since this one started counts.
+    fin=$(jq -c --arg a "$agent" --arg t "$started" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1 || true)
+    if [ "$status" = working ] && [ -z "$fin" ]; then supervise "$pane" "$REPORTS"; else supervise "$pane"; fi
+    record_session "$disp"
+    key=$(ticket_of "$agent"); [ -n "$key" ] || key=$(ticket_of "$RUN")
+    [ -z "$key" ] || [ -n "$(herdr pane get "$pane" | jq -r '.result.pane.tokens.label // empty')" ] || label_pane "$pane" "$key"
+    n=$((n + 1))
+  done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.dispatch, .agent, .status, (.pane_id // "-"), (.started // "")] | @tsv' "$LEDGER")
+  echo "$n"
+}
+
 case "$CMD" in
   run)
-    NAME= WAKE= LABEL= LABEL_SET= LINK=
-    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; --link) LINK=$2; shift 2 ;; *) die "run: unknown option $1" ;; esac; done
+    NAME= WAKE= LABEL= LABEL_SET= LINK= TAKE=0
+    while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; --link) LINK=$2; shift 2 ;; --take-over) TAKE=1; shift ;; *) die "run: unknown option $1" ;; esac; done
     check_link "$LINK"
     herdr agent deliveries >/dev/null 2>&1 || die "this Herdr server has no delivery queue: dispatch needs the Herdr build with orchestration support"
     case ",$WAKE," in *[!a-z_,]*) die "run: --wake takes a comma-separated list of mail types" ;; esac
     RUN=${NAME:-run-$(date +%Y%m%d-%H%M%S)}
     RUN=$(printf '%s' "$RUN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')
-    RUN_DIR="$RUNS/$RUN"; mkdir -p "$RUN_DIR/workers" "$STATE"
+    RUN_DIR="$RUNS/$RUN"; LEDGER="$RUN_DIR/ledger.json"; INBOX="$RUN_DIR/inbox.jsonl"
+    OLD=$(supervisor); MOVED=
+    if [ -n "${HERDR_PANE_ID:-}" ] && [ "$OLD" != "$HERDR_PANE_ID" ]; then
+      [ -z "$OLD" ] || [ -n "$(gone_supervisor)" ] || [ "$TAKE" = 1 ] \
+        || die "run '$RUN' is supervised by pane $OLD, which is still open. Pass --take-over to move it to this pane"
+      MOVED=1
+    fi
+    mkdir -p "$RUN_DIR/workers" "$STATE"
     [ -f "$RUN_DIR/ledger.json" ] || echo '[]' >"$RUN_DIR/ledger.json"
     touch "$RUN_DIR/inbox.jsonl"
     echo "$RUN" >"$POINTER"
@@ -337,7 +374,11 @@ case "$CMD" in
       [ -z "$LABEL$LABEL_SET" ] || label_pane "$HERDR_PANE_ID" "$LABEL"
       link_pane "$HERDR_PANE_ID" "$LINK"
     fi
-    jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}'
+    LINKED=0; [ -z "$MOVED" ] || LINKED=$(link_workers)
+    [ -z "$MOVED" ] || [ -z "$OLD" ] || echo "dispatch.sh: run '$RUN' moved from pane $OLD to this pane, with $LINKED live workers. Run ps: mail sent meanwhile woke no one" >&2
+    jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" --arg old "${MOVED:+$OLD}" --argjson n "$LINKED" \
+      '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}
+       + (if $old == "" then {} else {moved_from: $old, linked: $n} end)'
     ;;
 
   start)
@@ -475,6 +516,8 @@ case "$CMD" in
   ps)
     bind_run
     JSON=0; while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
+    GONE=$(gone_supervisor)
+    [ -z "$GONE" ] || echo "dispatch.sh: warning: the supervisor pane $GONE of run '$RUN' is gone, so wakes reach no one. From the pane that supervises it now, run: $0 run --name $RUN" >&2
     UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
     AS='{}'
     for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
@@ -657,21 +700,8 @@ EOF
     N=0
     for LEDGER in "$RUNS"/*/ledger.json; do
       [ -f "$LEDGER" ] || continue
-      RUN_DIR=$(dirname "$LEDGER"); RUN=$(basename "$RUN_DIR"); SUP=$(supervisor)
-      herdr pane get "$SUP" >/dev/null 2>&1 || continue
-      while IFS=$'\t' read -r DISP AGENT STATUS LEDGER_PANE STARTED; do
-        PANE=$(herdr agent get "$AGENT" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
-        # The name must still be on the pane the ledger has. A later run can own the name now.
-        [ -n "$PANE" ] && [ "$PANE" = "$LEDGER_PANE" ] && [ "$PANE" != "$SUP" ] || continue
-        # A worker that said it is done is not watched, also while that mail waits for its ack.
-        # An earlier attempt can have had the same name, so only mail since this one started counts.
-        DONE=$(jq -c --arg a "$AGENT" --arg t "$STARTED" 'select(.from == $a and .type == "worker_done" and .ts >= $t)' "$RUN_DIR/inbox.jsonl" 2>/dev/null | head -1 || true)
-        if [ "$STATUS" = working ] && [ -z "$DONE" ]; then supervise "$PANE" "$REPORTS"; else supervise "$PANE"; fi
-        record_session "$DISP"
-        KEY=$(ticket_of "$AGENT"); [ -n "$KEY" ] || KEY=$(ticket_of "$RUN")
-        [ -z "$KEY" ] || [ -n "$(herdr pane get "$PANE" | jq -r '.result.pane.tokens.label // empty')" ] || label_pane "$PANE" "$KEY"
-        N=$((N + 1))
-      done < <(jq -r '.[] | select(.agent != null and (.status == "working" or .decision == "retain" or .decision == "reuse")) | [.dispatch, .agent, .status, (.pane_id // "-"), (.started // "")] | @tsv' "$LEDGER")
+      RUN_DIR=$(dirname "$LEDGER"); RUN=$(basename "$RUN_DIR")
+      N=$((N + $(link_workers)))
     done
     jq -cn --argjson n "$N" '{adopted: $n}'
     ;;

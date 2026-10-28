@@ -271,6 +271,29 @@ jq -e --arg i "$K1" '.sent == $i and .duplicate == true and .acked == false' <<<
 wk report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent == $i and .acked == true' >/dev/null || fail "a key repeated after the ack was sent again"
 [ ! -s "$WK/delivered" ] || fail "an acked repeat woke the supervisor: $(cat "$WK/delivered")"
 rm "$ST/runs/smoke/supervisor"
+
+# A run whose supervisor pane is gone moves to the pane that binds it, with its live workers. ps
+# names a gone pane. A run whose supervisor pane is open moves only with --take-over.
+echo sup:old >"$WK/alive"; : >"$WK/supervised"
+HERDR_PANE_ID=sup:old wk run --name takeover >/dev/null || fail "run from a pane"
+TL="$ST/runs/takeover/ledger.json"
+jq '. + [{dispatch: "d_t1", attempt: 1, status: "working", agent: "tw1", pane_id: "tp:1", started: "2026-01-01T00:00:00Z", after: [], launch: {}},
+         {dispatch: "d_t2", attempt: 1, status: "settled", decision: "release", agent: "tw2", pane_id: "tp:2", after: [], launch: {}}]' "$TL" >"$TL.new" && mv "$TL.new" "$TL"
+echo tp:1 >"$WK/agents/tw1"; echo tp:2 >"$WK/agents/tw2"
+HERDR_PANE_ID=sup:new wk run --name takeover >/dev/null 2>&1 && fail "a run moved from a supervisor pane that is still open"
+[ "$(cat "$ST/runs/takeover/supervisor")" = sup:old ] || fail "a refused run changed the supervisor"
+wk ps --run takeover 2>&1 >/dev/null | grep -q "is gone" && fail "ps warned about an open supervisor pane"
+: >"$WK/alive"
+wk ps --run takeover 2>&1 >/dev/null | grep -q "supervisor pane sup:old of run 'takeover' is gone.*run --name takeover$" || fail "ps does not name a gone supervisor pane"
+echo sup:new >"$WK/alive"
+HERDR_PANE_ID=sup:new wk run --name takeover 2>/dev/null | jq -e '.moved_from == "sup:old" and .linked == 1' >/dev/null || fail "run did not take over from a gone pane"
+[ "$(cat "$ST/runs/takeover/supervisor")" = sup:new ] || fail "the supervisor was not moved"
+grep -qx "pane supervise tp:1 --by sup:new --report blocked,exited,stalled" "$WK/supervised" || fail "a live worker was not linked to the new supervisor: $(cat "$WK/supervised")"
+grep -q "tp:2" "$WK/supervised" && fail "a released worker was linked"
+wk ps --run takeover 2>&1 >/dev/null | grep -q "is gone" && fail "ps still warns after the take-over"
+echo sup:third >>"$WK/alive"
+HERDR_PANE_ID=sup:third wk run --name takeover --take-over 2>/dev/null | jq -e '.moved_from == "sup:new"' >/dev/null || fail "--take-over did not move the run"
+HERDR_PANE_ID=sup:third wk run --name takeover 2>/dev/null | jq -e '.moved_from == null' >/dev/null || fail "a re-bind from the same pane moved the run"
 "$D" report --run smoke --from keyed --type worker_done --key done-msg_1 --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent != $i and .duplicate == null' >/dev/null || fail "a new key was not sent"
 "$D" report --run smoke --from other --type status --key done --subject s 2>/dev/null | jq -e --arg i "$K1" '.sent != $i' >/dev/null || fail "a key of another agent counted"
 # A later attempt of the agent may use a key again once the first message with it is acked.

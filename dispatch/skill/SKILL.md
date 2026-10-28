@@ -36,12 +36,14 @@ One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-sl
 
 ```bash
 S=<directory of this SKILL.md>/scripts
-$S/dispatch.sh run --name <slug> [--label <text>] [--link <url>] [--wake <types>]   # once per supervising session; later commands default to it
+$S/dispatch.sh run --name <slug> [--label <text>] [--link <url>] [--wake <types>] [--take-over]   # once per supervising session; later commands default to it
 $S/dispatch.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
   [--label <text>] [--link <url>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch-id>]... [-- <native agent args>]
 ```
 
 A run named for an issue (`sre-142-migrate-probes`) labels this pane with the key. `--label` sets another label, and `--label ""` sets none.
+
+This pane becomes the run's supervisor: wakes go to it. When you come back in a new pane (a resumed or restarted session), run `run --name <slug>` again. A run whose supervisor pane is gone moves to this pane, and its live workers are linked to it again. `ps` warns when the supervisor pane is gone and prints this command. `run` refuses a run whose supervisor pane is still open, because another session supervises it; `--take-over` moves it anyway. Ask the user before you pass it.
 
 Write the task to a file first (the scratchpad is fine). `start` prints a JSON receipt: `dispatch`, `agent`, `workspace_id`, `pane_id`, `worktree`, `branch`, `worker_inbox`, `status`. Keep `dispatch` and `agent`; ids change. `--after` records the dispatch as `pending` and launches it when every named dispatch settles `succeeded`.
 

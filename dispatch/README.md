@@ -88,6 +88,7 @@ How a run is linked to its parent attempt:
 herdr plugin install mago0/herdr-plugins/dispatch
 root="$(herdr plugin list --plugin dispatch --json | jq -r '.result.plugins[0].plugin_root')"
 ln -s "$root/skill" ~/.claude/skills/dispatch   # or your agent's skills directory
+ln -s "$root/bin/fleet" ~/.local/bin/fleet       # the fleet command: dispatch.sh by its coming name
 ```
 
 Keep the skill symlinked to the installed plugin and do not copy it, so that the skill text and the scripts stay the same version.

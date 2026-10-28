@@ -1,6 +1,6 @@
 ---
 name: dispatch
-description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr, supervised from this session. Use when the user says 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, row labels, the dispatch ledger, worker mail (status, question, escalation, worker_done), push wakes, acked delivery, off-pane replies, dependencies, liveness, cleanup, and watch jobs that wake an agent."
+description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr, supervised from this session. Also called fleet. Use when the user says 'fleet', 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, row labels, the dispatch ledger, worker mail (status, question, escalation, worker_done), push wakes, acked delivery, off-pane replies, dependencies, liveness, cleanup, and watch jobs that wake an agent."
 ---
 
 # dispatch

@@ -27,7 +27,8 @@
 #   dispatch.sh report  --from <agent> --type <t> --subject <s> [--key <k>] [--body <text> | --body-file <f>] [--outcome <o>]
 #                       worker side: mail the supervisor, and wake it for the run's wake types. A repeat is not sent
 #                       again and returns the first id: the same --key still un-acked or sent in the agent's current
-#                       attempt, or with no key the same content still un-acked
+#                       attempt, or with no key the same content still un-acked. A repeat of an un-acked message
+#                       wakes the supervisor again for that message
 #   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
 #                       type one line into the supervisor (or --to) from any process; exit 3 = no such agent
 #   dispatch.sh adopt                                            link the live workers of every run to their
@@ -694,12 +695,17 @@ EOF
       ${BODY_FILE:+--body-file "$BODY_FILE"} ${BODY:+--body "$BODY"} ${OUTCOME:+--outcome "$OUTCOME"} \
       ${KEY:+--key "$KEY"} ${SINCE:+--since "$SINCE"})
     echo "$SENT"
-    # The supervisor already has a repeat, and was woken for it once.
-    [ "$(jq -r '.duplicate // false' <<<"$SENT")" = false ] || exit 0
+    ID=$(jq -r .sent <<<"$SENT")
+    if [ "$(jq -r '.duplicate // false' <<<"$SENT")" = true ]; then
+      # An acked repeat is handled. An un-acked one may have lost its wake, so it wakes again for the first message.
+      [ "$(jq -r '.acked // false' <<<"$SENT")" = false ] || exit 0
+      FIRST=$("$MAIL" read --inbox "$INBOX" --id "$ID")
+      TYPE=$(jq -r .type <<<"$FIRST"); SUBJ=$(jq -r .subject <<<"$FIRST")
+    fi
     # A worker that is done stays linked for the tree and sends no more reports.
     [ "$TYPE" != worker_done ] || supervise "$FROM"
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
-      ID=$(jq -r .sent <<<"$SENT"); SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
+      SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
       notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
         "dispatch: $TYPE from $FROM" "$SHORT" ;;
     esac

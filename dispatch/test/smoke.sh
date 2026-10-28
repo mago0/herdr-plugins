@@ -239,16 +239,38 @@ STOPPED_AT=$("$D" show --run smoke --dispatch d_stop | jq -r .settled)
 echo ok >"$WR"; dsp stop --run smoke --dispatch d_stop >/dev/null || fail "re-run of stop"
 "$D" show --run smoke --dispatch d_stop | jq -e --arg s "$STOPPED_AT" '.released != null and .settled == $s' >/dev/null || fail "re-run of stop did not release"
 
-# A report is sent once per key. A repeat returns the first id, appends nothing and wakes no one.
-INB="$ST/runs/smoke/inbox.jsonl"
-K1=$("$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
+# A Herdr shim that keeps each wake line in delivered and each supervise call in supervised, and
+# answers pane get for the panes in alive and agent get for each agents/<name> (its pane id).
+WK="$XDG_STATE_HOME/wake-shim"; mkdir -p "$WK/bin" "$WK/agents"; : >"$WK/alive"
+cat >"$WK/bin/herdr" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "agent deliver") echo "\$3 \$4" >>"$WK/delivered"; echo '{"result":{"delivery":{}}}' ;;
+  "pane get") grep -qxF -- "\$3" "$WK/alive" || { echo '{"error":{"code":"pane_not_found"}}'; exit 1; }
+    jq -cn --arg p "\$3" '{result: {pane: {pane_id: \$p, tokens: {label: "x"}}}}' ;;
+  "pane supervise") echo "\$*" >>"$WK/supervised"; echo '{"result":{}}' ;;
+  "agent get") [ -f "$WK/agents/\$3" ] || exit 1
+    jq -cn --arg n "\$3" --arg p "\$(cat "$WK/agents/\$3")" '{result: {agent: {name: \$n, pane_id: \$p, agent_status: "working"}}}' ;;
+  *) echo '{"result":{}}' ;;
+esac
+EOF
+chmod +x "$WK/bin/herdr"
+wk() { PATH="$WK/bin:$PATH" "$D" "$@"; }
+
+# A report is sent once per key. A repeat returns the first id and appends nothing. While the first
+# is un-acked, the repeat wakes the supervisor again for it: the first wake can be lost.
+INB="$ST/runs/smoke/inbox.jsonl"; echo sup:1 >"$ST/runs/smoke/supervisor"; : >"$WK/delivered"
+K1=$(wk report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -r .sent)
 N=$(wc -l <"$INB")
-OUT=$("$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject "done, again" 2>&1)
-jq -e --arg i "$K1" '.sent == $i and .duplicate == true' <<<"$(head -1 <<<"$OUT")" >/dev/null || fail "a repeated key was sent again: $OUT"
-grep -q "not woken" <<<"$OUT" && fail "a repeat tried to wake the supervisor"
+OUT=$(wk report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject "done, again" 2>&1)
+jq -e --arg i "$K1" '.sent == $i and .duplicate == true and .acked == false' <<<"$(head -1 <<<"$OUT")" >/dev/null || fail "a repeated key was sent again: $OUT"
 [ "$(wc -l <"$INB")" = "$N" ] || fail "a repeat was appended"
+[ "$(grep -c "^sup:1 MAIL|$K1|worker_done|keyed|done - " "$WK/delivered")" = 2 ] || fail "an un-acked repeat did not wake the supervisor again for the first message: $(cat "$WK/delivered")"
 "$D" ack --run smoke --id "$K1" --decision release >/dev/null 2>&1
-"$D" report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent == $i' >/dev/null || fail "a key repeated after the ack was sent again"
+: >"$WK/delivered"
+wk report --run smoke --from keyed --type worker_done --key done --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent == $i and .acked == true' >/dev/null || fail "a key repeated after the ack was sent again"
+[ ! -s "$WK/delivered" ] || fail "an acked repeat woke the supervisor: $(cat "$WK/delivered")"
+rm "$ST/runs/smoke/supervisor"
 "$D" report --run smoke --from keyed --type worker_done --key done-msg_1 --outcome succeeded --subject done 2>/dev/null | jq -e --arg i "$K1" '.sent != $i and .duplicate == null' >/dev/null || fail "a new key was not sent"
 "$D" report --run smoke --from other --type status --key done --subject s 2>/dev/null | jq -e --arg i "$K1" '.sent != $i' >/dev/null || fail "a key of another agent counted"
 # A later attempt of the agent may use a key again once the first message with it is acked.

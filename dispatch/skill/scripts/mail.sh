@@ -2,7 +2,7 @@
 # File mailbox between dispatched agents and their supervisor: one JSON object per line.
 #   mail.sh send  --inbox F --from NAME --type T --subject S [--body TEXT | --body-file F] [--outcome O] [--reply-to ID]
 #                 [--key K [--since TS]]
-#                 a repeat is not appended and prints {sent: <first id>, duplicate: true}: with --key, a message
+#                 a repeat is not appended and prints {sent: <first id>, duplicate: true, acked: <bool>}: with --key, a message
 #                 from NAME with key K that is un-acked or sent at or after TS (any time with no --since);
 #                 without --key, an un-acked message from NAME with the same content
 #   mail.sh read  --inbox F [--id ID] [--unacked] [--types T,T]   # message(s) as JSON lines
@@ -64,13 +64,14 @@ case "$CMD" in
     # Lock: bodies can exceed the size the kernel appends atomically, and the repeat check must see
     # every append and ack before it.
     { flock 9
-      DUP=$(jq -nr --rawfile acked "$ACKED" --argjson m "$LINE" --arg since "$SINCE" '
+      DUP=$(jq -nc --rawfile acked "$ACKED" --argjson m "$LINE" --arg since "$SINCE" '
         ($acked | split("\n") | map(select(length > 0) | {key: ., value: true}) | from_entries) as $a
         | first(inputs | select(.from == $m.from)
             | if $m.key != null then select(.key == $m.key and (($a[.id] | not) or .ts >= $since))
               else select(($a[.id] | not) and .type == $m.type and .subject == $m.subject and .body == $m.body
-                          and .outcome == $m.outcome and .reply_to == $m.reply_to) end) | .id' "$INBOX" 2>/dev/null || true)
-      if [ -n "$DUP" ]; then jq -cn --arg id "$DUP" '{sent: $id, duplicate: true}'
+                          and .outcome == $m.outcome and .reply_to == $m.reply_to) end)
+          | {sent: .id, duplicate: true, acked: ($a[.id] != null)}' "$INBOX" 2>/dev/null || true)
+      if [ -n "$DUP" ]; then printf '%s\n' "$DUP"
       else printf '%s\n' "$LINE" >>"$INBOX"; jq -c '{sent: .id}' <<<"$LINE"; fi
     } 9>"$INBOX.lock"
     ;;

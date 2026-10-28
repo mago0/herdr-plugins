@@ -19,7 +19,9 @@
 #                       settle; worker_done requires --decision, and retain or reuse also --reason and --until
 #   dispatch.sh reply   --id <question> (--body <text> | --body-file <f>)   answer into the worker's inbox
 #   dispatch.sh send    --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
-#   dispatch.sh ps      [--json]                                 fleet: status, liveness, attention, next action
+#   dispatch.sh ps      [--json] [--tree [--all]]                fleet: status, liveness, attention, next action
+#                       --tree: also the runs that this run's workers supervise, at every depth, indented under
+#                       their attempt; done rows are hidden unless --all
 #   dispatch.sh retry   --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
 #                       retry and resume refuse once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
 #   dispatch.sh resume  --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
@@ -346,6 +348,183 @@ link_workers() {
   echo "$n"
 }
 
+# The fleet rows of the bound run, one JSON object per attempt. <run arg> follows the command word of
+# every dispatch.sh command in NEXT, such as " --run <run>" for a run that is not the caller's.
+ps_rows() {  # <run arg>
+  local UNACKED AS A ST LEFT DONES
+  UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
+  AS='{}'
+  for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
+    ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent | if . == null then "missing" elif .stalled_secs then "stalled" else .agent_status end' || echo missing)
+    AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
+  done
+  # Attempts that were to be released and still have a worktree: a release that failed or never ran.
+  LEFT=$(jq -r '.[] | select(.released == null and .worktree != null
+      and ((.status == "settled" and .decision == "release") or .status == "stopped")) | [.dispatch, .worktree] | @tsv' "$LEDGER" \
+    | while IFS=$'\t' read -r DD WT; do [ ! -d "$WT" ] || echo "$DD"; done | jq -R . | jq -sc .)
+  DONES=$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -sc 'map({id, from, ts})')
+  jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson dones "$DONES" --arg ra "$1" '
+    (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
+    | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
+    | .[]
+    | . as $e
+    | ($un | map(select(.from == $e.agent))) as $mine
+    | (if $e.status == "pending" then "-"
+       elif $e.status != "working" then $e.status
+       else ($as[$e.agent] // "missing") as $st
+         | if $st == "missing" then "exited"
+           elif $st == "blocked" then "stuck"
+           elif $st == "stalled" then "stalled"
+           else "live"
+           end
+       end) as $live
+    | (($e.after // []) | map(select(. as $a | $bad | any(. == $a)))) as $failed_deps
+    | (($e.after // []) | map(select(. as $a | $ok | any(. == $a) | not))) as $unmet
+    | (if $e.status == "pending" then (if ($failed_deps | length) > 0 then "dep failed" elif ($unmet | length) > 0 then "waiting deps" else "ready" end)
+       elif ($left | index($e.dispatch)) != null then "unreleased"
+       elif ($mine | any(.type == "escalation")) then "escalation"
+       elif ($mine | any(.type == "worker_done")) then "worker_done"
+       elif ($mine | any(.type == "question")) then "question"
+       elif $live == "stuck" then "stuck"
+       elif $live == "stalled" then "stalled"
+       elif $live == "exited" and $e.status == "working" then "exited"
+       elif $e.status == "failed_start" then "failed_start"
+       elif ($mine | any(.type == "status")) then "status"
+       else "none" end) as $att
+    | (($mine | map(select(.type == $att)) | first | .id) // "") as $mid
+    | ($e.settled_by // ($dones | map(select(.from == $e.agent and .ts <= ($e.settled // ""))) | last | .id)) as $done_id
+    | (if $e.status == "stopped" then "\($mail) stop\($ra) --dispatch \($e.dispatch)"
+       elif $done_id != null then "\($mail) ack\($ra) --id \($done_id) --decision release"
+       else "herdr worktree remove --workspace \($e.workspace_id)" end) as $finish
+    | (if $att == "unreleased" then
+         (if ($e.placement // "") == "tab" then "close its tab by hand (herdr agent get \($e.agent)), then git worktree remove \($e.worktree)"
+          elif $e.release_error != null then "release failed (\($e.release_error)): look at what is dirty in \($e.worktree), then herdr worktree remove --workspace \($e.workspace_id) --force; then \($finish)"
+          else $finish end)
+       elif $att == "escalation" then "tell the user; \($mail) read\($ra) --id \($mid)"
+       elif $att == "worker_done" then "\($mail) ack\($ra) --id \($mid) --decision reuse|retain|release"
+       elif $att == "question" then "\($mail) reply\($ra) --id \($mid) --body ..."
+       elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
+       elif $att == "stalled" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
+       elif $att == "exited" and ($e.session.value // "") != ""
+         then "inspect; \($mail) resume\($ra) --dispatch \($e.dispatch), retry or abandon"
+       elif $att == "exited" then "inspect; \($mail) retry\($ra) --dispatch \($e.dispatch) or abandon"
+       elif $att == "failed_start" then "\($mail) show\($ra) --dispatch \($e.dispatch); \($mail) retry\($ra) --dispatch \($e.dispatch)"
+       elif $att == "status" then "\($mail) read\($ra) --id \($mid); \($mail) ack\($ra) --id \($mid)"
+       elif $att == "dep failed" then "\($mail) retry\($ra) --dispatch \($failed_deps | first)"
+       elif $att == "waiting deps" then "-"
+       elif $att == "ready" then "launching on next ack"
+       elif ($e.decision == "retain" or $e.decision == "reuse") and $e.released == null then
+         "kept (\($e.decision)): \($e.decision_reason // "no reason recorded"); release when \($e.release_when // "not recorded")"
+       else "\($mail) wait\($ra)" end) as $next
+    | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
+       liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
+       decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript,
+       released: $e.released, release_error: $e.release_error}' "$LEDGER"
+}
+
+# Nested runs: a run whose supervisor pane is the pane of an attempt in another run is a child of
+# that attempt. The time an attempt stops holding its pane is its release, or the close of an
+# attempt that keeps no agent; one that runs or is kept (retain, reuse) holds it still (null).
+HELD_JQ='def held_until: if .released != null then .released
+    elif .status == "working" or .status == "pending" then null
+    elif .status == "settled" and (.decision == "retain" or .decision == "reuse") then null
+    else .settled // .started end;
+  def candidates($pane; $t; $run): .runs as $runs | .attempts | map(select(.run != $run and .pane == $pane
+    and .started <= $t and (.end == null or .end >= $t)) | . + {supervisor: $runs[.run].supervisor});'
+
+# Every run with a ledger: its supervisor pane, when that pane last bound it (the mtime of the
+# supervisor file), its recorded parent, and every attempt that held a pane.
+runs_index() {
+  local d sup meta= parents=()
+  for d in "$RUNS"/*/; do
+    d=${d%/}; [ -f "$d/ledger.json" ] || continue
+    sup=; [ ! -f "$d/supervisor" ] || read -r sup <"$d/supervisor" || true
+    meta+="${d##*/}"$'\t'"$sup"$'\t'"$([ -z "$sup" ] || date -u -r "$d/supervisor" +%Y-%m-%dT%H:%M:%SZ)"$'\n'
+    [ ! -f "$d/parent" ] || parents+=("$d/parent")
+  done
+  [ -n "$meta" ] || { echo '{"runs":{},"attempts":[]}'; return 0; }
+  jq -nc --arg meta "$meta" "$HELD_JQ"'
+    ($meta | split("\n") | map(select(length > 0) | split("\t")
+      | {key: .[0], value: {supervisor: .[1], bound: .[2], parent: null}}) | from_entries) as $m
+    | reduce inputs as $x ({runs: $m, attempts: []};
+        (input_filename | split("/")) as $p
+        | if $p[-1] == "parent" then .runs[$p[-2]].parent = $x
+          else .attempts += [$x[] | select(.pane_id != null and .started != null)
+            | {run: $p[-2], dispatch, agent, pane: .pane_id, started, end: held_until}] end)' \
+    "$RUNS"/*/ledger.json "${parents[@]+"${parents[@]}"}"
+}
+
+# The one attempt among <candidates> that is the parent of a run supervised from <pane>, or nothing.
+# Herdr's supervision link of the pane, when it has one, must name the supervisor of that attempt's run.
+pick_parent() {  # <pane> <candidates json>
+  local s
+  [ "$(jq length <<<"$2")" -gt 0 ] || return 0
+  s=$(herdr agent get "$1" 2>/dev/null | jq -r '.result.agent.supervisor_pane_id // empty' 2>/dev/null || true)
+  jq -c --arg s "$s" 'map(select($s == "" or .supervisor == $s))
+    | if length == 1 then .[0] | {run, dispatch} else empty end' <<<"$2"
+}
+
+# The parent of each run: the one recorded at bind, else, for a run bound before parents were
+# recorded, the one attempt that held the run's supervisor pane when that pane bound it.
+run_parents() {  # <index json>
+  local ix=$1 out r pane cands p line
+  out=$(jq -c '.runs | with_entries(select(.value.parent.dispatch != null)
+    | .value = (.value.parent | {run, dispatch, how: "recorded"}))' <<<"$ix")
+  while IFS= read -r line; do
+    r=$(jq -r .run <<<"$line"); pane=$(jq -r .pane <<<"$line"); cands=$(jq -c .cands <<<"$line")
+    p=$(pick_parent "$pane" "$cands")
+    [ -z "$p" ] || out=$(jq -c --arg r "$r" --argjson p "$p" '.[$r] = $p + {how: "inferred"}' <<<"$out")
+  done < <(jq -c "$HELD_JQ"' . as $ix | .runs | to_entries[]
+    | select(.value.parent == null and .value.supervisor != "")
+    | .key as $r | .value as $v
+    | {run: $r, pane: $v.supervisor, cands: ($ix | candidates($v.supervisor; $v.bound; $r))}
+    | select(.cands | length > 0)' <<<"$ix")
+  echo "$out"
+}
+
+# Record the parent of the bound run, from the pane that now supervises it. A run bound from a
+# pane that is no attempt's gets a record with no dispatch, so its parent is never inferred.
+record_parent() {
+  local ix p t; t=$(now)
+  ix=$(runs_index)
+  p=$(pick_parent "$HERDR_PANE_ID" "$(jq -c --arg p "$HERDR_PANE_ID" --arg t "$t" --arg r "$RUN" "$HELD_JQ"' candidates($p; $t; $r)' <<<"$ix")")
+  [ -n "$p" ] || p='{}'
+  jq -c --arg pane "$HERDR_PANE_ID" --arg t "$t" '. + {pane: $pane, bound: $t}' <<<"$p" >"$RUN_DIR/parent.new"
+  mv "$RUN_DIR/parent.new" "$RUN_DIR/parent"
+  jq -c 'select(.dispatch != null) | {run, dispatch}' "$RUN_DIR/parent"
+}
+
+# ps --tree: the bound run and, under each attempt, the runs that attempt supervises, at every depth.
+# A row that is done (settled, stopped or abandoned, with nothing owed and nothing kept) and has no
+# shown row below it is hidden unless <all> is 1. Prints the tree as JSON.
+ps_tree() {  # <all 0|1>
+  local ix parents runs r nodes= root=$RUN
+  ix=$(runs_index); parents=$(run_parents "$ix")
+  runs=$(jq -r --arg root "$root" --argjson p "$parents" '
+    def kids($r): $p | to_entries | map(select(.value.run == $r) | .key);
+    def down($r; $seen): $r, (kids($r)[] | select(. as $k | $seen | any(.[]; . == $k) | not) as $k | down($k; $seen + [$k]));
+    down($root; [$root])' <<<"{}")
+  for r in $runs; do
+    RUN=$r; RUN_DIR="$RUNS/$r"; LEDGER="$RUN_DIR/ledger.json"; INBOX="$RUN_DIR/inbox.jsonl"
+    nodes+=$(ps_rows "$([ "$r" = "$root" ] || echo " --run $r")" | jq -sc --arg r "$r" --arg gone "$(gone_supervisor)" \
+      --arg sup "$(supervisor)" '{run: $r, supervisor: $sup, supervisor_gone: ($gone != ""), rows: .}')$'\n'
+  done
+  RUN=$root; RUN_DIR="$RUNS/$root"; LEDGER="$RUN_DIR/ledger.json"; INBOX="$RUN_DIR/inbox.jsonl"
+  jq -sc 'map({key: .run, value: .}) | from_entries' <<<"$nodes" \
+  | jq -c --arg root "$root" --argjson p "$parents" --argjson all "$1" --arg mail "$0" '. as $R
+    | def done: .attention == "none" and (.status == "settled" or .status == "stopped" or .status == "abandoned")
+        and ((.decision == "retain" or .decision == "reuse") and .released == null | not);
+      def node($r; $seen):
+        ($R[$r].rows | map(. as $row | . + {runs: [$p | to_entries[]
+            | select(.value.run == $r and .value.dispatch == $row.dispatch and (.key as $k | $seen | any(.[]; . == $k) | not))
+            | node(.key; $seen + [.key])]})) as $all_rows
+        | ($all_rows | map(select($all == 1 or (done | not) or any(.runs[]; .rows | length > 0)))) as $shown
+        | {run: $r, supervisor: $R[$r].supervisor, supervisor_gone: $R[$r].supervisor_gone,
+           parent: ($p[$r] // null), hidden: (($all_rows | length) - ($shown | length)), rows: $shown}
+        + (if $R[$r].supervisor_gone then {next: "from the pane that supervises it now: \($mail) run --name \($r)"} else {} end);
+      node($root; [$root])'
+}
+
 case "$CMD" in
   run)
     NAME= WAKE= LABEL= LABEL_SET= LINK= TAKE=0
@@ -376,9 +555,13 @@ case "$CMD" in
     fi
     LINKED=0; [ -z "$MOVED" ] || LINKED=$(link_workers)
     [ -z "$MOVED" ] || [ -z "$OLD" ] || echo "dispatch.sh: run '$RUN' moved from pane $OLD to this pane, with $LINKED live workers. Run ps: mail sent meanwhile woke no one" >&2
-    jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" --arg old "${MOVED:+$OLD}" --argjson n "$LINKED" \
+    # A run bound from a dispatched worker's pane is a child of that worker's attempt, for ps --tree.
+    PARENT=
+    if [ -n "${HERDR_PANE_ID:-}" ] && { [ -n "$MOVED" ] || [ ! -f "$RUN_DIR/parent" ]; }; then PARENT=$(record_parent); fi
+    jq -cn --arg run "$RUN" --arg dir "$RUN_DIR" --arg old "${MOVED:+$OLD}" --argjson n "$LINKED" --arg parent "$PARENT" \
       '{run: $run, dir: $dir, inbox: ($dir + "/inbox.jsonl"), ledger: ($dir + "/ledger.json")}
-       + (if $old == "" then {} else {moved_from: $old, linked: $n} end)'
+       + (if $old == "" then {} else {moved_from: $old, linked: $n} end)
+       + (if $parent == "" then {} else {parent: ($parent | fromjson)} end)'
     ;;
 
   start)
@@ -515,77 +698,28 @@ case "$CMD" in
 
   ps)
     bind_run
-    JSON=0; while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
+    JSON=0 TREE=0 ALL=0
+    while [ $# -gt 0 ]; do case "$1" in --json) JSON=1; shift ;; --tree) TREE=1; shift ;; --all) ALL=1; shift ;; *) die "ps: unknown option $1" ;; esac; done
+    [ "$TREE" = 1 ] || [ "$ALL" = 0 ] || die "ps: --all goes with --tree"
+    if [ "$TREE" = 1 ]; then
+      T=$(ps_tree "$ALL")
+      if [ "$JSON" = 1 ]; then jq . <<<"$T"; exit 0; fi
+      # One line per run and per attempt, indented by depth. A run line says where it is supervised from.
+      { printf 'TREE\tDISPATCH\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
+        jq -r 'def pad($d): [range($d)] | map("  ") | add // "";
+          def lines($d): [pad($d) + "run " + .run, "", "", "", "", "",
+              ([if .parent != null and $d == 0 then "under \(.parent.run) \(.parent.dispatch)" else empty end,
+                if .supervisor_gone then "supervisor pane \(.supervisor) is gone; \(.next)"
+                elif (.supervisor // "") == "" then "no supervisor pane" else "supervised from \(.supervisor)" end,
+                if .hidden > 0 then "\(.hidden) done hidden (--all shows them)" else empty end] | join("; "))],
+            (.rows[] | [pad($d + 1) + .agent, .dispatch, .status, .outcome, .liveness, .attention, .next],
+                       (.runs[] | lines($d + 2)));
+          lines(0) | @tsv' <<<"$T"; } | column -t -s $'\t'
+      exit 0
+    fi
     GONE=$(gone_supervisor)
     [ -z "$GONE" ] || echo "dispatch.sh: warning: the supervisor pane $GONE of run '$RUN' is gone, so wakes reach no one. From the pane that supervises it now, run: $0 run --name $RUN" >&2
-    UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
-    AS='{}'
-    for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
-      ST=$(herdr agent get "$A" 2>/dev/null | jq -r '.result.agent | if . == null then "missing" elif .stalled_secs then "stalled" else .agent_status end' || echo missing)
-      AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
-    done
-    # Attempts that were to be released and still have a worktree: a release that failed or never ran.
-    LEFT=$(jq -r '.[] | select(.released == null and .worktree != null
-        and ((.status == "settled" and .decision == "release") or .status == "stopped")) | [.dispatch, .worktree] | @tsv' "$LEDGER" \
-      | while IFS=$'\t' read -r DD WT; do [ ! -d "$WT" ] || echo "$DD"; done | jq -R . | jq -sc .)
-    DONES=$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -sc 'map({id, from, ts})')
-    ROWS=$(jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson dones "$DONES" '
-      (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
-      | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
-      | .[]
-      | . as $e
-      | ($un | map(select(.from == $e.agent))) as $mine
-      | (if $e.status == "pending" then "-"
-         elif $e.status != "working" then $e.status
-         else ($as[$e.agent] // "missing") as $st
-           | if $st == "missing" then "exited"
-             elif $st == "blocked" then "stuck"
-             elif $st == "stalled" then "stalled"
-             else "live"
-             end
-         end) as $live
-      | (($e.after // []) | map(select(. as $a | $bad | any(. == $a)))) as $failed_deps
-      | (($e.after // []) | map(select(. as $a | $ok | any(. == $a) | not))) as $unmet
-      | (if $e.status == "pending" then (if ($failed_deps | length) > 0 then "dep failed" elif ($unmet | length) > 0 then "waiting deps" else "ready" end)
-         elif ($left | index($e.dispatch)) != null then "unreleased"
-         elif ($mine | any(.type == "escalation")) then "escalation"
-         elif ($mine | any(.type == "worker_done")) then "worker_done"
-         elif ($mine | any(.type == "question")) then "question"
-         elif $live == "stuck" then "stuck"
-         elif $live == "stalled" then "stalled"
-         elif $live == "exited" and $e.status == "working" then "exited"
-         elif $e.status == "failed_start" then "failed_start"
-         elif ($mine | any(.type == "status")) then "status"
-         else "none" end) as $att
-      | (($mine | map(select(.type == $att)) | first | .id) // "") as $mid
-      | ($e.settled_by // ($dones | map(select(.from == $e.agent and .ts <= ($e.settled // ""))) | last | .id)) as $done_id
-      | (if $e.status == "stopped" then "\($mail) stop --dispatch \($e.dispatch)"
-         elif $done_id != null then "\($mail) ack --id \($done_id) --decision release"
-         else "herdr worktree remove --workspace \($e.workspace_id)" end) as $finish
-      | (if $att == "unreleased" then
-           (if ($e.placement // "") == "tab" then "close its tab by hand (herdr agent get \($e.agent)), then git worktree remove \($e.worktree)"
-            elif $e.release_error != null then "release failed (\($e.release_error)): look at what is dirty in \($e.worktree), then herdr worktree remove --workspace \($e.workspace_id) --force; then \($finish)"
-            else $finish end)
-         elif $att == "escalation" then "tell the user; \($mail) read --id \($mid)"
-         elif $att == "worker_done" then "\($mail) ack --id \($mid) --decision reuse|retain|release"
-         elif $att == "question" then "\($mail) reply --id \($mid) --body ..."
-         elif $att == "stuck" then "herdr agent get \($e.agent) | jq -r .result.agent.blocker"
-         elif $att == "stalled" then "herdr agent read \($e.agent) --source recent-unwrapped --lines 120"
-         elif $att == "exited" and ($e.session.value // "") != ""
-           then "inspect; \($mail) resume --dispatch \($e.dispatch), retry or abandon"
-         elif $att == "exited" then "inspect; \($mail) retry --dispatch \($e.dispatch) or abandon"
-         elif $att == "failed_start" then "\($mail) show --dispatch \($e.dispatch); \($mail) retry --dispatch \($e.dispatch)"
-         elif $att == "status" then "\($mail) read --id \($mid); \($mail) ack --id \($mid)"
-         elif $att == "dep failed" then "\($mail) retry --dispatch \($failed_deps | first)"
-         elif $att == "waiting deps" then "-"
-         elif $att == "ready" then "launching on next ack"
-         elif ($e.decision == "retain" or $e.decision == "reuse") and $e.released == null then
-           "kept (\($e.decision)): \($e.decision_reason // "no reason recorded"); release when \($e.release_when // "not recorded")"
-         else "\($mail) wait" end) as $next
-      | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
-         liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
-         decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript,
-         released: $e.released, release_error: $e.release_error}' "$LEDGER")
+    ROWS=$(ps_rows "")
     if [ "$JSON" = 1 ]; then jq -s . <<<"$ROWS"; else
       { printf 'DISPATCH\tAGENT\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
         jq -r '[.dispatch, .agent, .status, .outcome, .liveness, .attention, .next] | @tsv' <<<"$ROWS"; } | column -t -s $'\t'

@@ -447,4 +447,81 @@ grep -q "Dispatch needs a Herdr build with herdr agent resume" <<<"$OUT" || fail
 [ ! -e "$LS/opened" ] || fail "a worktree opened on an old Herdr"
 echo new >"$XDG_STATE_HOME/herdr-mode"; rm -f "$T"
 
+# Nested runs. A Herdr shim answers agent get from tree-shim/agents/<name or pane> and pane get for
+# the panes in alive. t-proj supervises issue-a, whose pane binds t-a; t-a supervises review-a,
+# whose pane bound t-a-review before parents were recorded.
+TS="$XDG_STATE_HOME/tree-shim"; mkdir -p "$TS/bin" "$TS/agents"; printf '%s\n' tsup:0 ta:1 ra:1 >"$TS/alive"
+cat >"$TS/bin/herdr" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  "agent get") [ -f "$TS/agents/\$3" ] || exit 1; jq -c '{result: {agent: .}}' "$TS/agents/\$3" ;;
+  "pane get") grep -qxF -- "\$3" "$TS/alive" || exit 1; jq -cn --arg p "\$3" '{result: {pane: {pane_id: \$p, tokens: {label: "x"}}}}' ;;
+  *) echo '{"result":{}}' ;;
+esac
+EOF
+chmod +x "$TS/bin/herdr"
+ts() { PATH="$TS/bin:$PATH" "$D" "$@"; }
+agent() {  # <name> <pane> <supervisor pane>
+  jq -cn --arg n "$1" --arg p "$2" --arg s "$3" '{name: $n, pane_id: $p, agent_status: "working", supervisor_pane_id: $s}' >"$TS/agents/$1"
+  cp "$TS/agents/$1" "$TS/agents/$2"
+}
+attempts() {  # <run> <jq expression for an array of attempts>
+  local f="$ST/runs/$1/ledger.json"
+  jq --argjson x "$(jq -nc "$2")" '. + [$x[] | {attempt: 1, after: [], launch: {}} + .]' "$f" >"$f.new" && mv "$f.new" "$f"
+}
+legacy() {  # <run> <supervisor pane> <bound at>: a run bound before parents were recorded
+  mkdir -p "$ST/runs/$1"; echo '[]' >"$ST/runs/$1/ledger.json"; : >"$ST/runs/$1/inbox.jsonl"
+  echo "$2" >"$ST/runs/$1/supervisor"; touch -d "$3" "$ST/runs/$1/supervisor"
+}
+tree() { ts ps --run "$1" --tree --json "${@:2}"; }
+HERDR_PANE_ID=tsup:0 ts run --name t-proj | jq -e '.parent == null' >/dev/null || fail "a run bound from no attempt's pane got a parent"
+jq -e '.dispatch == null and .pane == "tsup:0"' "$ST/runs/t-proj/parent" >/dev/null || fail "a top-level bind was not recorded"
+attempts t-proj '[{dispatch: "d_ta", agent: "issue-a", pane_id: "ta:1", status: "working", started: "2026-01-01T00:00:00Z"},
+  {dispatch: "d_tb", agent: "issue-b", pane_id: "tb:1", status: "settled", outcome: "succeeded", decision: "release",
+   started: "2026-01-01T00:00:00Z", settled: "2026-01-03T00:00:00Z", released: "2026-01-03T00:00:00Z"},
+  {dispatch: "d_tx", agent: "issue-x", pane_id: "tx:1", status: "settled", outcome: "succeeded", decision: "release",
+   started: "2026-01-01T00:00:00Z", settled: "2026-01-02T00:00:00Z", released: "2026-01-02T00:00:00Z"}]'
+agent issue-a ta:1 tsup:0
+HERDR_PANE_ID=ta:1 ts run --name t-a | jq -e '.parent == {run: "t-proj", dispatch: "d_ta"}' >/dev/null || fail "run from a worker's pane did not record its attempt"
+attempts t-a '[{dispatch: "d_ra", agent: "review-a", pane_id: "ra:1", status: "working", started: "2026-01-05T00:00:00Z"},
+  {dispatch: "d_la", agent: "lint-a", pane_id: "la:1", status: "settled", outcome: "succeeded", decision: "release",
+   started: "2026-01-05T00:00:00Z", settled: "2026-01-05T01:00:00Z", released: "2026-01-05T01:00:00Z"}]'
+agent review-a ra:1 ta:1
+legacy t-a-review ra:1 2026-01-06T00:00:00Z
+attempts t-a-review '[{dispatch: "d_lt", agent: "loadtest", pane_id: "lt:1", status: "working", started: "2026-01-06T00:00:00Z"}]'
+agent loadtest lt:1 ra:1
+Q=$(ts report --run t-a-review --from loadtest --type question --subject "raise the rate?" 2>/dev/null | jq -r .sent)
+# issue-b bound t-b-old while it ran; issue-x was released before its pane bound t-later.
+legacy t-b-old tb:1 2026-01-02T00:00:00Z
+attempts t-b-old '[{dispatch: "d_bo", agent: "old", pane_id: "bo:1", status: "settled", outcome: "succeeded", decision: "release",
+  started: "2026-01-02T00:00:00Z", settled: "2026-01-02T01:00:00Z", released: "2026-01-02T01:00:00Z"}]'
+legacy t-later tx:1 2026-02-01T00:00:00Z
+TJ=$(tree t-proj)
+jq -e '.run == "t-proj" and .hidden == 2 and ([.rows[].dispatch] == ["d_ta"])' <<<"$TJ" >/dev/null || fail "done rows were not hidden: $TJ"
+jq -e '.rows[0].runs[0] | .run == "t-a" and .parent.how == "recorded" and .hidden == 1 and ([.rows[].dispatch] == ["d_ra"])' <<<"$TJ" >/dev/null || fail "level 2: $TJ"
+jq -e --arg q "$Q" '.rows[0].runs[0].rows[0].runs[0] | .run == "t-a-review" and .parent == {run: "t-a", dispatch: "d_ra", how: "inferred"}
+  and (.rows[0] | .attention == "question" and (.next | test("reply --run t-a-review --id " + $q)))' <<<"$TJ" >/dev/null || fail "level 3: $TJ"
+TA=$(tree t-proj --all)
+jq -e '[.rows[].dispatch] == ["d_ta", "d_tb", "d_tx"] and .hidden == 0' <<<"$TA" >/dev/null || fail "--all hid a row: $TA"
+jq -e '(.rows[] | select(.dispatch == "d_tb") | .runs[0].run) == "t-b-old"' <<<"$TA" >/dev/null || fail "a run bound while its attempt ran was not linked: $TA"
+jq -e '[.. | .run? // empty] | index("t-later") == null' <<<"$TA" >/dev/null || fail "a run was linked to an attempt released before it was bound: $TA"
+ts ps --run t-proj --tree | grep -q '^      review-a ' || fail "the table does not indent by depth: $(ts ps --run t-proj --tree)"
+ts ps --run t-proj --tree | grep -q '^run t-proj .*2 done hidden' || fail "the table does not count hidden rows"
+ts ps --run t-a --tree --json | jq -e '.parent.run == "t-proj" and .rows[0].runs[0].run == "t-a-review"' >/dev/null || fail "a tree from a middle run"
+[ "$(ts ps --run t-proj | head -1 | awk '{print $1}')" = DISPATCH ] || fail "ps without --tree changed"
+ts ps --run t-proj --all >/dev/null 2>&1 && fail "--all without --tree"
+# Two runs held the same pane: with no Herdr link it is ambiguous, and Herdr's link picks one.
+HERDR_PANE_ID=x1:0 ts run --name t-p1 >/dev/null; HERDR_PANE_ID=x2:0 ts run --name t-p2 >/dev/null
+attempts t-p1 '[{dispatch: "d_p1", agent: "am1", pane_id: "am:1", status: "working", started: "2026-01-01T00:00:00Z"}]'
+attempts t-p2 '[{dispatch: "d_p2", agent: "am2", pane_id: "am:1", status: "settled", decision: "retain", started: "2026-01-01T00:00:00Z"}]'
+legacy t-amb am:1 2026-01-10T00:00:00Z
+tree t-p1 | jq -e '.rows[0].runs == []' >/dev/null && tree t-p2 | jq -e '.rows[0].runs == []' >/dev/null || fail "an ambiguous pane was linked"
+agent am2 am:1 x2:0
+tree t-p2 | jq -e '.rows[0].runs[0].run == "t-amb"' >/dev/null || fail "Herdr's link did not settle an ambiguous pane"
+tree t-p1 | jq -e '.rows[0].runs == []' >/dev/null || fail "a run was linked against Herdr's link"
+# A run moved to a pane that is no attempt's is no longer a child.
+echo tsup:9 >>"$TS/alive"
+HERDR_PANE_ID=tsup:9 ts run --name t-a --take-over 2>/dev/null | jq -e '.parent == null' >/dev/null || fail "a moved run kept its parent"
+tree t-proj | jq -e '.rows[0].runs == []' >/dev/null || fail "a run moved off its parent's pane is still under it"
+
 echo "smoke ok"

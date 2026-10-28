@@ -1,9 +1,9 @@
 ---
-name: dispatch
-description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr, supervised from this session. Also called fleet. Use when the user says 'fleet', 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, row labels, the dispatch ledger, worker mail (status, question, escalation, worker_done), push wakes, acked delivery, off-pane replies, dependencies, liveness, cleanup, and watch jobs that wake an agent."
+name: fleet
+description: "Send a unit of work to another coding agent (same kind as the calling agent by default; claude, omp, pi, codex, ...) in its own git worktree in Herdr, supervised from this session. Also called dispatch. Use when the user says 'fleet', 'dispatch', 'hand this to another agent', 'run this in a worktree', 'spawn an agent for X', or when another skill needs a supervised worker. Covers worktree and branch naming, row labels, the fleet ledger, worker mail (status, question, escalation, worker_done), push wakes, acked delivery, off-pane replies, dependencies, liveness, cleanup, and watch jobs that wake an agent."
 ---
 
-# dispatch
+# fleet
 
 **The dispatcher does not do the task.** It creates the worktree, starts the agent, gives it a way to report, and relays what comes back.
 
@@ -11,9 +11,9 @@ Consumer skills describe *what* to dispatch. This skill is *how*.
 
 ## 1. Requirements
 
-`herdr-dispatch.sh` refuses outside a Herdr pane (see the `herdr` skill). `herdr`, `jq`, `flock` on PATH; `inotifywait` for event-driven waits (falls back to polling).
+`herdr-fleet.sh` refuses outside a Herdr pane (see the `herdr` skill). `herdr`, `jq`, `flock` on PATH; `inotifywait` for event-driven waits (falls back to polling).
 
-The Herdr server must have delivery queues, supervision links and jobs (`herdr agent deliver`, `herdr pane supervise`, `herdr job`). `dispatch.sh run` stops with a clear message on a server that does not. `start` and `resume` also need `herdr agent resume` and `agent start --prompt-file`; on a Herdr without them they stop before a worktree opens and say so. Tell the user: the Herdr build must be updated, and `retry` does not help.
+The Herdr server must have delivery queues, supervision links and jobs (`herdr agent deliver`, `herdr pane supervise`, `herdr job`). `fleet.sh run` stops with a clear message on a server that does not. `start` and `resume` also need `herdr agent resume` and `agent start --prompt-file`; on a Herdr without them they stop before a worktree opens and say so. Tell the user: the Herdr build must be updated, and `retry` does not help.
 
 ## 2. Inputs
 
@@ -22,7 +22,7 @@ The Herdr server must have delivery queues, supervision links and jobs (`herdr a
 - **Branch** - in this order:
   1. The convention set by project instructions or the calling skill, when there is one (an issue-tracker key plus a title slug, for example).
   2. Otherwise `<kind>/<task-slug>`, for example `claude/fix-probe-timeouts`.
-- **Agent kind** - inherited from the calling pane: claude dispatches claude, omp dispatches omp. Pass `--kind` only when the user names a different one. A consumer skill's default never overrides this, and neither does a bare `herdr agent start`: go through `dispatch.sh start` without `--kind`.
+- **Agent kind** - inherited from the calling pane: claude dispatches claude, omp dispatches omp. Pass `--kind` only when the user names a different one. A consumer skill's default never overrides this, and neither does a bare `herdr agent start`: go through `fleet.sh start` without `--kind`.
 - **Agent name** - a short slug that says what the work is, with no issue key in it: `fix-probe-timeouts`. Consumer skills set their own convention.
 - **Label** - the issue key or other short tag of the work: `--label SRE-142`. Herdr shows it at the right edge of the agent's row. A name that starts with an issue key (`sre-142-fix-probe-timeouts`) is split for you: the key becomes the label and the rest becomes the name. `--label ""` gives no label and keeps the name whole; use it for a name that starts like a key and is not one (`phase-1-cleanup`).
 - **Link** - the web address of the work, when it has one: `--link <url>` with the address of the issue or pull request. The user opens it from the row with ctrl+click. Project instructions say how to build the address from an issue key; with none, pass no link.
@@ -32,12 +32,12 @@ A task with no repo, or read-only research, does not need a worktree: split a si
 
 ## 3. Dispatch
 
-One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-slug>`, agent in its root pane. `dispatch.sh` is the supervisor: it owns a per-run ledger of attempts, an ack-based mailbox, off-pane replies, dependency launches, and a fleet view.
+One worktree = one Herdr workspace, checked out at `<repo>/_worktrees/<branch-slug>`, agent in its root pane. `fleet.sh` is the supervisor: it owns a per-run ledger of attempts, an ack-based mailbox, off-pane replies, dependency launches, and a fleet view.
 
 ```bash
 S=<directory of this SKILL.md>/scripts
-$S/dispatch.sh run --name <slug> [--label <text>] [--link <url>] [--wake <types>] [--take-over]   # once per supervising session; later commands default to it
-$S/dispatch.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
+$S/fleet.sh run --name <slug> [--label <text>] [--link <url>] [--wake <types>] [--take-over]   # once per supervising session; later commands default to it
+$S/fleet.sh start --repo <path> --branch <branch> --name <agent-name> --task <file> \
   [--label <text>] [--link <url>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch-id>]... [-- <native agent args>]
 ```
 
@@ -50,17 +50,17 @@ Write the task to a file first (the scratchpad is fine). `start` prints a JSON r
 What `start` does, so you do not repeat it: resolves the main checkout (also from inside a linked worktree), adds `_worktrees/` to `.git/info/exclude`, bases a new branch on `origin/HEAD` after a fetch unless `--base` is given, reuses an existing worktree, resolves the agent kind from the calling pane unless `--kind` is given, makes the agent name unique, starts the agent with `herdr agent start` (Herdr waits until the new pane's shell can take a whole command, and types the first prompt, which points at the task file, once the agent is ready), binds the name to the pane (hook-registered agents such as omp are detected without it), appends the reporting and inbox instructions to the task, records the attempt and the agent's session in the ledger, sets the row label, and makes this pane the supervisor of the worker's pane in Herdr.
 
 **Exit 3 / `status: blocked`** means the agent is up but waiting on a startup screen (herdr answers `agent_not_ready` at that point; the launcher reports the live state instead of a start failure). You also get a `HERDR|blocked|...` line that carries the text of the screen. The usual cause is Claude's folder trust prompt. Claude applies the main checkout's trust to its worktrees, so it only appears for a repo the user never opened in Claude. Tell the user; do not press it for them - one manual answer in the main checkout settles every later worktree.
-**`status: start_failed:*`** - the receipt has `detail`; the ledger row is `failed_start`. The workspace is left open for diagnosis; `dispatch.sh retry --dispatch <id>` starts a new attempt.
+**`status: start_failed:*`** - the receipt has `detail`; the ledger row is `failed_start`. The workspace is left open for diagnosis; `fleet.sh retry --dispatch <id>` starts a new attempt.
 
 ### The supervisor loop
 
 ```bash
-$S/dispatch.sh wait [--types question,escalation,worker_done] [--timeout <s>]   # blocks (inotify) until an un-acked message of a wanted type; prints MAIL|<id>|<type>|<from>|<subject>
-$S/dispatch.sh read --id <id>
-$S/dispatch.sh reply --id <question-id> --body "<answer>"                      # into the worker's inbox; acks the question; nudges the agent
-$S/dispatch.sh ack --id <id> [--decision reuse|retain|release] [--reason <why> --until <condition>]   # worker_done refuses without --decision
-$S/dispatch.sh ps [--json] [--tree [--all]]                                    # every attempt: status, liveness, attention, next action
-$S/dispatch.sh release --dispatch <d>                                          # end a kept attempt: removes its worktree (kills a live agent) and records the release
+$S/fleet.sh wait [--types question,escalation,worker_done] [--timeout <s>]   # blocks (inotify) until an un-acked message of a wanted type; prints MAIL|<id>|<type>|<from>|<subject>
+$S/fleet.sh read --id <id>
+$S/fleet.sh reply --id <question-id> --body "<answer>"                      # into the worker's inbox; acks the question; nudges the agent
+$S/fleet.sh ack --id <id> [--decision reuse|retain|release] [--reason <why> --until <condition>]   # worker_done refuses without --decision
+$S/fleet.sh ps [--json] [--tree [--all]]                                    # every attempt: status, liveness, attention, next action
+$S/fleet.sh release --dispatch <d>                                          # end a kept attempt: removes its worktree (kills a live agent) and records the release
 ```
 
 **You do not need a watcher.** The supervisor is woken by a prompt line typed into its pane:
@@ -86,13 +86,13 @@ Delivery is ack-based: a message stays visible to `wait`, `ps` and `read --unack
 | `escalation` | blocked, needs a human | tell the user now; `ack` |
 | `worker_done` | finished or abandoned; `outcome` is `succeeded` or `failed` | verify, then `ack --decision release`. Release is the default. Retain or reuse only with a reason and a release condition: `--reason "re-review pending" --until "the re-review lands"`, also stated in the same reply. Ack refuses retain or reuse without both. The ledger keeps them, and `ps` NEXT and `show` print them. Never force-remove a dirty worktree: report what is dirty and leave it for the user |
 
-`ack --decision release` removes the worktree (kills a live agent) and the worker's Claude Code temp dir under `/tmp/claude-<uid>/`. The agent's transcript stays: the attempt keeps Herdr's `session` reference and, when the file exists, its `transcript` path (claude, codex, pi, omp). Other kinds keep only `session`. A dirty worktree makes release fail with `dirty_worktree_requires_force`; the ledger still settles, the warning prints the exact force command, and `ps` shows the attempt as `unreleased` with that command until the worktree is gone - look at what is dirty first, unpushed work there is lost. Settlement is safe to re-run: an `ack` or `stop` that died after it settled and before it released is finished by the same command again, and `ps` names it. `retain` keeps the worktree; `reuse` keeps the agent for an immediate follow-up via `dispatch.sh send --agent <name> --subject <s> --body <text>`. When the release condition is met, `release --dispatch <d>` ends the kept attempt the same way, and a dirty worktree shows as `unreleased` again. It refuses an attempt that is not kept or that a later attempt replaced.
+`ack --decision release` removes the worktree (kills a live agent) and the worker's Claude Code temp dir under `/tmp/claude-<uid>/`. The agent's transcript stays: the attempt keeps Herdr's `session` reference and, when the file exists, its `transcript` path (claude, codex, pi, omp). Other kinds keep only `session`. A dirty worktree makes release fail with `dirty_worktree_requires_force`; the ledger still settles, the warning prints the exact force command, and `ps` shows the attempt as `unreleased` with that command until the worktree is gone - look at what is dirty first, unpushed work there is lost. Settlement is safe to re-run: an `ack` or `stop` that died after it settled and before it released is finished by the same command again, and `ps` names it. `retain` keeps the worktree; `reuse` keeps the agent for an immediate follow-up via `fleet.sh send --agent <name> --subject <s> --body <text>`. When the release condition is met, `release --dispatch <d>` ends the kept attempt the same way, and a dirty worktree shows as `unreleased` again. It refuses an attempt that is not kept or that a later attempt replaced.
 
-**`ps` liveness:** `live`, `stuck` (agent `blocked`), `stalled` (working with a screen that does not change), `exited` (agent gone with no `worker_done`). A worker that finished a turn sits at herdr `done`, which means ready for input, not gone - it stays `live`. `stalled` finds a frozen agent; an agent that still animates while it waits on a tool that never returns stays `live`. Silence never triggers an action by itself: `stuck`, `stalled` and `exited` are verdicts with a next action, and only you issue `dispatch.sh stop` (kills + removes worktree) or `abandon` (ledger only). `retry` and `resume` refuse once a task has run 5 attempts, counted through the `supersedes` chain (`DISPATCH_MAX_ATTEMPTS` sets the limit); tell the user before you pass `--force`. `stop` refuses a worker that an older version placed as a tab: close that tab by hand, then `abandon`.
+**`ps` liveness:** `live`, `stuck` (agent `blocked`), `stalled` (working with a screen that does not change), `exited` (agent gone with no `worker_done`). A worker that finished a turn sits at herdr `done`, which means ready for input, not gone - it stays `live`. `stalled` finds a frozen agent; an agent that still animates while it waits on a tool that never returns stays `live`. Silence never triggers an action by itself: `stuck`, `stalled` and `exited` are verdicts with a next action, and only you issue `fleet.sh stop` (kills + removes worktree) or `abandon` (ledger only). `retry` and `resume` refuse once a task has run 5 attempts, counted through the `supersedes` chain (`FLEET_MAX_ATTEMPTS` sets the limit); tell the user before you pass `--force`. `stop` refuses a worker that an older version placed as a tab: close that tab by hand, then `abandon`.
 
-**`ps` and kept attempts:** a kept attempt shows `kept (<decision>)` in NEXT only while it still holds something. A later attempt that ran (working, settled or stopped) replaces it: the same agent started again in the run, or an attempt down its `supersedes` chain. An abandoned or failed attempt replaces nothing. A replaced attempt shows `replaced by <dispatch>`, needs nothing, and `ps --tree` hides it unless `--all`. A kept attempt whose worktree is gone and whose agent does not run on its pane (someone removed it outside dispatch) shows attention `worktree gone` with `release --dispatch <d>`, which records the release. `ps` itself writes nothing.
+**`ps` and kept attempts:** a kept attempt shows `kept (<decision>)` in NEXT only while it still holds something. A later attempt that ran (working, settled or stopped) replaces it: the same agent started again in the run, or an attempt down its `supersedes` chain. An abandoned or failed attempt replaces nothing. A replaced attempt shows `replaced by <dispatch>`, needs nothing, and `ps --tree` hides it unless `--all`. A kept attempt whose worktree is gone and whose agent does not run on its pane (someone removed it outside fleet) shows attention `worktree gone` with `release --dispatch <d>`, which records the release. `ps` itself writes nothing.
 
-**Resume:** `dispatch.sh resume --dispatch <d> [--dry-run]` starts a new attempt that continues the old attempt's conversation in its own worktree, with `herdr agent resume` on the recorded session and the original native args. It covers every kind Herdr can resume: claude, codex, copilot, devin, droid, kimi, mastracode, pi, omp, hermes, opencode, qodercli, qwen, kilo, cursor, agy, grok and letta. It keeps the agent name, so the worker keeps its inbox, and it is supervised, labelled and linked again. It goes back into the old pane when that pane is still open on the worktree with no agent, else into a new workspace on the worktree. The worker is told it was interrupted and must check `git status` and its last step before it goes on. Resume refuses an attempt with no recorded session, a session Herdr cannot resume (it names the reason), and a worktree that is gone: use `retry`, which starts again from the task. It also refuses an agent that still runs (`send` it a follow-up) and an attempt that already has a newer one. `--dry-run` asks Herdr whether it takes the session, prints the plan and writes nothing.
+**Resume:** `fleet.sh resume --dispatch <d> [--dry-run]` starts a new attempt that continues the old attempt's conversation in its own worktree, with `herdr agent resume` on the recorded session and the original native args. It covers every kind Herdr can resume: claude, codex, copilot, devin, droid, kimi, mastracode, pi, omp, hermes, opencode, qodercli, qwen, kilo, cursor, agy, grok and letta. It keeps the agent name, so the worker keeps its inbox, and it is supervised, labelled and linked again. It goes back into the old pane when that pane is still open on the worktree with no agent, else into a new workspace on the worktree. The worker is told it was interrupted and must check `git status` and its last step before it goes on. Resume refuses an attempt with no recorded session, a session Herdr cannot resume (it names the reason), and a worktree that is gone: use `retry`, which starts again from the task. It also refuses an agent that still runs (`send` it a follow-up) and an attempt that already has a newer one. `--dry-run` asks Herdr whether it takes the session, prints the plan and writes nothing.
 
 **Nested runs:** a worker may bind a run of its own and dispatch its own workers. `ps --tree` shows the bound run and, under each attempt, the runs that attempt's pane supervises, at every depth, indented. NEXT names `--run <run>` for a child run. Done rows with nothing below them are hidden and counted on the run line; `--all` shows them. Read it to see a whole project; leave a child run's mail to the agent that supervises it unless the user asks you to act. `run` records a run's parent when it binds from a dispatched worker's pane. A run bound before that is linked only when exactly one attempt held its supervisor pane when the pane bound it, and Herdr's supervision link of the pane does not name another supervisor.
 
@@ -117,7 +117,7 @@ To type one line into an agent from any process: `herdr agent deliver <agent|pan
 
 - `ack --decision release` is the normal path, and `release --dispatch <d>` for a kept attempt. To sweep a worker by hand: `WS=$(herdr agent get <agent> | jq -r .result.agent.workspace_id); herdr worktree remove --workspace "$WS"` - resolve now, never from an old receipt.
 - Removing a worktree **kills a live agent without asking**. The branch stays; delete it separately if it is not needed.
-- **Never close the repo's parent workspace by hand** (the one Herdr opens on the main checkout). Release closes the parent after its last worktree is removed when Herdr opened it for the worktree: Herdr marks it `opened_for_worktrees` until someone renames it or opens a second pane in it. A server without that mark gets the token `dispatch_parent=1` instead, and release takes either. A plain close is refused with `workspace_group_close_required`; never bypass that with `workspace close --group`, which closes every worktree workspace and its agent.
+- **Never close the repo's parent workspace by hand** (the one Herdr opens on the main checkout). Release closes the parent after its last worktree is removed when Herdr opened it for the worktree: Herdr marks it `opened_for_worktrees` until someone renames it or opens a second pane in it. A server without that mark gets the token `fleet_parent=1` instead. Release takes the mark, that token, or the `dispatch_parent=1` an older version wrote. A plain close is refused with `workspace_group_close_required`; never bypass that with `workspace close --group`, which closes every worktree workspace and its agent.
 - Only remove worktrees this session dispatched unless the user asks for a sweep. Do not end the session with a settled attempt still owing a decision: `ps` shows `worker_done` attention until it is acked.
 
 ## 4. Writing tasks
@@ -136,7 +136,8 @@ The cost: a restrictive mode can stop a worker on an action it needs. Herdr tell
 
 ## Guardrails
 
-- Once a worker runs, stay out of its pane. The user often steers it directly; typed input collides. Mail in, `dispatch.sh reply`/`send` out - never type an answer into the terminal.
+- Once a worker runs, stay out of its pane. The user often steers it directly; typed input collides. Mail in, `fleet.sh reply`/`send` out - never type an answer into the terminal.
 - Target agents by name and attempts by dispatch id.
 - Never report "dispatched" from a receipt whose `status` is not `working`, `idle` or `done`.
 - Never ack a `worker_done` you have not verified, and never end a session with one un-acked.
+- The old names work until the user removes them: `dispatch.sh`, `herdr-dispatch.sh`, a `dispatch/scripts` path and `DISPATCH_RUN`. Use the fleet names in new commands.

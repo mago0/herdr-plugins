@@ -60,6 +60,28 @@ The `HERDR` lines come from the server, through the supervision link that `dispa
 
 `dispatch.sh ps` shows every attempt with its liveness and the next command to run. That includes an attempt that was to be released and still has its worktree, because the release failed or the command died first. Settling again finishes it.
 
+## Nested runs
+
+A worker can bind a run of its own and dispatch workers of its own: a project agent dispatches one agent per issue, and each issue agent dispatches a PR driver and reviewers. `dispatch.sh ps --tree` shows all of it from the top:
+
+```
+TREE                    DISPATCH  STATUS   OUTCOME  LIVE  ATTENTION  NEXT
+run t-proj                                                           supervised from tsup:0; 2 done hidden (--all shows them)
+  issue-a               d_ta      working  -        live  none       dispatch.sh wait
+    run t-a                                                          supervised from ta:1; 1 done hidden (--all shows them)
+      review-a          d_ra      working  -        live  none       dispatch.sh wait --run t-a
+        run t-a-review                                               supervised from ra:1
+          loadtest      d_lt      working  -        live  question   dispatch.sh reply --run t-a-review --id msg_1793154718920178725_4067045 --body ...
+```
+
+Each run sits under the attempt whose pane supervises it. A row that is done (settled, stopped or abandoned, with no mail owed and nothing kept) and has nothing shown below it is hidden and counted on its run line. `--all` shows every row, and `--json` gives the same tree nested. `ps` without `--tree` shows one run, as before.
+
+How a run is linked to its parent attempt:
+
+- `dispatch.sh run` records the parent in `runs/<run>/parent` when it binds the run from a dispatched worker's pane: the attempt of another run that holds that pane now. A bind from any other pane records no parent.
+- A run bound before parents were recorded is linked when the evidence is unambiguous: exactly one attempt held its supervisor pane when that pane last bound the run (the time of the `supervisor` file). An attempt holds its pane from its start until its release, or until it is closed when it keeps no agent.
+- Herdr's supervision link of the pane, when it has one, must name the supervisor of that attempt's run. Pane ids are reused, so a released attempt is never linked to a later run on its pane by the id alone.
+
 ## Install
 
 ```sh
@@ -113,6 +135,7 @@ State is under `${XDG_STATE_HOME:-~/.local/state}/agent-dispatch/`:
 - `runs/<run>/workers/<agent>/inbox.jsonl`: supervisor to worker mail
 - `<inbox>.acked` and `<inbox>.lock`: the acked ids, and the lock. Writers append under an exclusive lock and readers read under a shared one, so no reader sees half a message. A line that does not parse is skipped.
 - `runs/<run>/supervisor`: the pane that gets the run's wake lines, set by `dispatch.sh run`
+- `runs/<run>/parent`: the attempt whose pane bound the run, for `ps --tree`; with no `dispatch` when the pane was no attempt's
 
 Diagrams of version 0.1.0, as standalone HTML to open locally: `docs/overview.html` and `docs/architecture.html`. They still show the event hook, which Herdr replaced.
 

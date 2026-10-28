@@ -100,6 +100,18 @@ Requirements:
 - A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later), and with `agent resume` and `agent start --prompt-file` (the fork's agent launch, see its `FORK.md`). On a Herdr without agent resume, `start` and `resume` stop with a message that says so, before a worktree opens.
 - `bash`, `jq`, `flock`, `git`; `inotifywait` for an event-driven `fleet.sh wait` (falls back to polling)
 
+### With Nix or devbox
+
+The flake packages fleet with its tools pinned (bash, jq, flock, git, coreutils, and `inotifywait` on Linux), so it needs only Herdr on PATH:
+
+```sh
+devbox global add github:mago0/herdr-plugins#fleet    # or: nix profile install github:mago0/herdr-plugins#fleet
+share="$(dirname "$(readlink -f "$(command -v fleet)")")/../share/herdr-plugins/fleet"
+ln -s "$share/skill" ~/.claude/skills/fleet           # or your agent's skills directory
+```
+
+The package does not include Herdr: fleet needs the fork's server, which you install yourself.
+
 `fleet.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor, and records their sessions.
 
 A supervisor that comes back in a new pane runs `fleet.sh run --name <run>` again. When the run's supervisor pane is gone, the run moves to the new pane and its live workers are linked to it. `fleet.sh ps` warns about a gone supervisor pane. A run whose supervisor pane is still open moves only with `--take-over`.

@@ -16,6 +16,8 @@ herdr plugin install mago0/herdr-plugins/status-pane
 herdr plugin install mago0/herdr-plugins/tree
 ```
 
+fleet is also a Nix package, with its tools pinned: `devbox global add github:mago0/herdr-plugins#fleet` or `nix profile install github:mago0/herdr-plugins#fleet`. See [fleet/README.md](fleet/README.md#with-nix-or-devbox).
+
 Each plugin directory has its own README.
 
 ## License

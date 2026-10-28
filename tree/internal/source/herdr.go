@@ -1,4 +1,4 @@
-// Package source reads the live Herdr state and the dispatch plugin's state files.
+// Package source reads the live Herdr state and the fleet plugin's state files.
 package source
 
 import (

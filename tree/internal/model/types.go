@@ -62,7 +62,7 @@ type Agent struct {
 	Blocker      string
 	BlockerLines []string
 	Dialog       string
-	// Reported is true when the dispatch ledger has the agent's worker_done taken by its supervisor.
+	// Reported is true when the fleet ledger has the agent's worker_done taken by its supervisor.
 	Reported bool
 	// PaneName is the name the user gave the agent's pane, or "".
 	PaneName string

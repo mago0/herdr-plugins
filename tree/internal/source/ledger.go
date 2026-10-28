@@ -73,14 +73,21 @@ func followedUp(run, agent, since string) bool {
 	return false
 }
 
-// LedgerDir is the folder that holds one folder for each dispatch run.
+// LedgerDir is the folder that holds one folder for each fleet run: under agent-fleet, or under
+// agent-dispatch while that is the only one.
 func LedgerDir() string {
 	state := os.Getenv("XDG_STATE_HOME")
 	if state == "" {
 		home, _ := os.UserHomeDir()
 		state = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(state, "agent-dispatch", "runs")
+	dir := filepath.Join(state, "agent-fleet")
+	if _, err := os.Stat(dir); err != nil {
+		if _, err := os.Stat(filepath.Join(state, "agent-dispatch")); err == nil {
+			dir = filepath.Join(state, "agent-dispatch")
+		}
+	}
+	return filepath.Join(dir, "runs")
 }
 
 // Settled reads the ledger of each run in dir and returns the panes whose latest dispatch is

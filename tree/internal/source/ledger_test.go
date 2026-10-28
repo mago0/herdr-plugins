@@ -55,9 +55,28 @@ func TestSettledWithNoRuns(t *testing.T) {
 
 func TestLedgerDirFollowsXDGStateHome(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/state")
-	if got := LedgerDir(); got != "/state/agent-dispatch/runs" {
+	if got := LedgerDir(); got != "/state/agent-fleet/runs" {
 		t.Fatalf("LedgerDir = %q", got)
 	}
+}
+
+func TestLedgerDirFollowsTheStateLayout(t *testing.T) {
+	state := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", state)
+	want := func(layout, dir string) {
+		t.Helper()
+		if got := LedgerDir(); got != filepath.Join(state, dir, "runs") {
+			t.Fatalf("%s: LedgerDir = %q, want %s/runs", layout, got, dir)
+		}
+	}
+	want("no state", "agent-fleet")
+	os.Mkdir(filepath.Join(state, "agent-dispatch"), 0o755)
+	want("only agent-dispatch", "agent-dispatch")
+	os.Rename(filepath.Join(state, "agent-dispatch"), filepath.Join(state, "agent-fleet"))
+	os.Symlink("agent-fleet", filepath.Join(state, "agent-dispatch"))
+	want("agent-dispatch a link to agent-fleet", "agent-fleet")
+	os.Remove(filepath.Join(state, "agent-dispatch"))
+	want("only agent-fleet", "agent-fleet")
 }
 
 func TestSettledIsClearedByAFollowUpAfterTheSettle(t *testing.T) {

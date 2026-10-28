@@ -27,7 +27,7 @@ An effort is one piece of work, such as a ticket or a project. Its parent agent 
  ▸ Core PHP8.3 Upgrade  ● ●       SRE-923 ↗
 ```
 
-The supervisor of each worker comes from Herdr: the `supervisor_pane_id` of the agent, which `herdr pane supervise` sets and `herdr agent start` sets for an agent started from another pane. The [dispatch](../dispatch/) plugin sets it for each worker. On a Herdr server without that field, no agent is a worker and each workspace lists its own agents.
+The supervisor of each worker comes from Herdr: the `supervisor_pane_id` of the agent, which `herdr pane supervise` sets and `herdr agent start` sets for an agent started from another pane. The [fleet](../fleet/) plugin sets it for each worker. On a Herdr server without that field, no agent is a worker and each workspace lists its own agents.
 
 ## Install
 
@@ -130,7 +130,7 @@ A row has a clock and a count after that when the pane owns Herdr jobs or receiv
 
 The counts after a branch are `-N` for commits behind and `+N` for commits ahead. A count of zero is not shown, and a branch with nothing to count against has no counts. A detached HEAD shows its short commit id. The counts are as of the last fetch: the pane does not fetch, and it asks Git again every 10 seconds.
 
-`reported` comes from the [dispatch](../dispatch/) ledgers in `$XDG_STATE_HOME/agent-dispatch/runs` (`~/.local/state/agent-dispatch/runs` by default): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`, and the supervisor has sent it no follow-up since (`dispatch.sh send`). It is not shown while the worker is working.
+`reported` comes from the [fleet](../fleet/) ledgers in `$XDG_STATE_HOME/agent-fleet/runs` (`~/.local/state/agent-fleet/runs` by default, or `agent-dispatch/runs` while only that one exists): the latest dispatch of the worker's pane is settled, which means the supervisor took its `worker_done`, and the supervisor has sent it no follow-up since (`fleet.sh send`). It is not shown while the worker is working.
 
 ## Labels
 
@@ -149,7 +149,7 @@ herdr pane report-metadata "$HERDR_PANE_ID" --source tree --clear-token label --
   ln -s "$root/skill" ~/.claude/skills/herdr-tree
   ```
 
-`dispatch.sh run` and `dispatch.sh start` set the label from `--label`, or from an issue key at the start of the run name or the agent name.
+`fleet.sh run` and `fleet.sh start` set the label from `--label`, or from an issue key at the start of the run name or the agent name.
 
 ## Panes that do not count
 

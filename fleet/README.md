@@ -18,7 +18,7 @@ For a short exchange with an agent beside you, use it. It is simpler. It stops f
 - **The supervisor stays free.** No blocking wait and no idle token cost. One supervisor can hold many workers and hear from them in any order.
 - **Real messages, not screen scraping.** Workers send typed mail (`status`, `question`, `escalation`, `worker_done` with an outcome). A wait only says an agent stopped, and reading its terminal can lose output.
 - **Durable and acked.** Mail stays until it is acknowledged, so it survives a restart, a context compaction or a missed wake. Herdr events are not replayed. A report carries a key, and a repeat of a key is not sent again, so a worker can resend when it is not sure. A repeat of a message that is not yet acked wakes the supervisor again, so a lost wake is repaired.
-- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while the target pane is focused, holds text you typed and did not send, or its agent works or is at a dialog. You get a toast, and Herdr types it when that ends.
+- **It does not corrupt a half-typed prompt.** `herdr agent prompt` appends to whatever is in the input box and submits it. A wake goes through Herdr's delivery queue: it is held while you use the target pane (a key press there within `session.delivery_focus_hold_secs`), while the pane holds text you typed and did not send, or its agent works or is at a dialog. You get a toast, and Herdr types it when that ends.
 - **Blocked, stalled and dead workers are reported at once**, with the text of the dialog a blocked worker shows.
 - **A lifecycle around each worker.** A worktree per task, a ledger of attempts, retries and resumes (5 attempts per task unless forced), dependencies, and an explicit keep or release decision at the end. A resume continues the same conversation in the same worktree.
 - **External polls move out of the harness.** A command that watches a chat thread or a pull request runs as a Herdr job, with no pane and no time limit, and wakes an agent only when something changed.
@@ -97,7 +97,7 @@ Keep the skill symlinked to the installed plugin and do not copy it, so that the
 
 Requirements:
 
-- A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `orchestration` or later), and with `agent resume` and `agent start --prompt-file` (the fork's agent launch, see its `FORK.md`). On a Herdr without agent resume, `start` and `resume` stop with a message that says so, before a worktree opens.
+- A Herdr server with `agent deliver`, `pane supervise` and `job` ([mago0/herdr](https://github.com/mago0/herdr), branch `fork`), and with `agent resume` and `agent start --prompt-file` (the fork's agent launch, see its `FORK.md`). On a Herdr without agent resume, `start` and `resume` stop with a message that says so, before a worktree opens.
 - `bash`, `jq`, `flock`, `git`; `inotifywait` for an event-driven `fleet.sh wait` (falls back to polling)
 
 ### With Nix or devbox
@@ -105,12 +105,24 @@ Requirements:
 The flake packages fleet with its tools pinned (bash, jq, flock, git, coreutils, and `inotifywait` on Linux), so it needs only Herdr on PATH:
 
 ```sh
-devbox global add github:mago0/herdr-plugins#fleet    # or: nix profile install github:mago0/herdr-plugins#fleet
+devbox global add github:mago0/herdr-plugins#fleet    # or: nix profile add github:mago0/herdr-plugins#fleet
 share="$(dirname "$(readlink -f "$(command -v fleet)")")/../share/herdr-plugins/fleet"
 ln -s "$share/skill" ~/.claude/skills/fleet           # or your agent's skills directory
 ```
 
-The package does not include Herdr: fleet needs the fork's server, which you install yourself.
+The package does not include Herdr: fleet needs the fork's server, which you install yourself (see the fork's `FORK.md`, it is a Nix package too).
+
+### With Home Manager
+
+The flake exports `homeManagerModules.default`. It installs the packages, links the fleet skill into `~/.claude/skills` and `~/.agents/skills` (set `programs.herdr-plugins.fleet.skillDirs` to change that), and runs `herdr plugin link` on each switch:
+
+```nix
+# flake inputs: herdr.url = "github:mago0/herdr/fork"; herdr-plugins.url = "github:mago0/herdr-plugins";
+imports = [ herdr.homeManagerModules.default herdr-plugins.homeManagerModules.default ];
+programs.herdr.enable = true;
+programs.herdr-plugins.fleet.enable = true;
+programs.herdr-plugins.tree.enable = true;
+```
 
 `fleet.sh adopt` links the live workers of runs that an older version started, so that they show under their supervisor, and records their sessions.
 

@@ -14,8 +14,11 @@
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
     in
     {
+      homeManagerModules.default = import ./nix/module.nix self;
+
       packages = forAll (pkgs: rec {
         fleet = pkgs.callPackage ./fleet/package.nix { };
+        tree = pkgs.callPackage ./tree/package.nix { };
         default = fleet;
       });
     };

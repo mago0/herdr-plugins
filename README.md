@@ -18,6 +18,8 @@ herdr plugin install mago0/herdr-plugins/tree
 
 fleet and tree are also Nix packages, with their tools pinned: `devbox global add github:mago0/herdr-plugins#fleet` or `nix profile add github:mago0/herdr-plugins#fleet`, and `#tree`. The flake also exports a Home Manager module, `homeManagerModules.default`. See [fleet/README.md](fleet/README.md#with-nix-or-devbox).
 
+To try the fork with fleet and tree in a Herdr session of their own, apart from your own Herdr: `nix run github:mago0/herdr-plugins#try`.
+
 Each plugin directory has its own README.
 
 ## License

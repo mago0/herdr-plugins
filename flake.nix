@@ -21,5 +21,23 @@
         tree = pkgs.callPackage ./tree/package.nix { };
         default = fleet;
       });
+
+      # `nix run .#try`: the fork and both plugins in a Herdr session of their own.
+      apps = forAll (pkgs: {
+        try = {
+          type = "app";
+          program = nixpkgs.lib.getExe (
+            pkgs.writeShellApplication {
+              name = "herdr-fleet-try";
+              runtimeInputs = [
+                pkgs.coreutils
+                pkgs.git
+              ];
+              text = builtins.readFile ./nix/try.sh;
+            }
+          );
+          meta.description = "Try the Herdr fork with fleet and tree in a session of their own";
+        };
+      });
     };
 }

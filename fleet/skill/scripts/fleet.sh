@@ -1,62 +1,71 @@
 #!/usr/bin/env bash
-# Supervisor front-end for Herdr dispatch: a per-run ledger of dispatch attempts, an ack-based
+# Fleet, the supervisor front-end for Herdr workers: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
-#   dispatch.sh run     [--name <slug>] [--wake <types>] [--label <text>] [--link <url>] [--take-over]
+#   fleet.sh run        [--name <slug>] [--wake <types>] [--label <text>] [--link <url>] [--take-over]
 #                       bind (create or resume) a run; later commands default to it. This pane becomes the
 #                       supervisor and the run's live workers are linked to it. A run whose supervisor pane is
 #                       still open moves only with --take-over
 #                       --wake: mail types that wake the supervisor (default question,escalation,worker_done)
 #                       --label: label of the supervisor's row in the sidebar tree, such as an issue key
-#   dispatch.sh start   --repo <path> --branch <name> --name <agent> --task <file>
+#   fleet.sh start      --repo <path> --branch <name> --name <agent> --task <file>
 #                       [--label <text>] [--link <url>] [--kind <herdr kind>] [--base <ref>] [--after <dispatch>]... [-- <agent args>]
 #                       --label: label of the worker's row. A name that starts with an issue key
 #                       (sre-142-fix-probes) gives the label SRE-142 and the name fix-probes.
 #                       --link: web address the sidebar tree opens for the row, such as that of the issue
-#   dispatch.sh wait    [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
-#   dispatch.sh read    --id <msg>                               full message JSON
-#   dispatch.sh ack     --id <msg> [--decision reuse|retain|release] [--reason <why>] [--until <condition>]
+#   fleet.sh wait       [--types t,t] [--timeout <s>]           block until an un-acked message of a wanted type; prints MAIL| lines
+#   fleet.sh read       --id <msg>                               full message JSON
+#   fleet.sh ack        --id <msg> [--decision reuse|retain|release] [--reason <why>] [--until <condition>]
 #                       settle; worker_done requires --decision, and retain or reuse also --reason and --until
-#   dispatch.sh reply   --id <question> (--body <text> | --body-file <f>)   answer into the worker's inbox
-#   dispatch.sh send    --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
-#   dispatch.sh ps      [--json] [--tree [--all]]                fleet: status, liveness, attention, next action
+#   fleet.sh reply      --id <question> (--body <text> | --body-file <f>)   answer into the worker's inbox
+#   fleet.sh send       --agent <name> --subject <s> (--body <text> | --body-file <f>)   follow-up into the worker's inbox
+#   fleet.sh ps         [--json] [--tree [--all]]                fleet: status, liveness, attention, next action
 #                       --tree: also the runs that this run's workers supervise, at every depth, indented under
 #                       their attempt; done rows are hidden unless --all
-#   dispatch.sh retry   --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
-#                       retry and resume refuse once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
-#   dispatch.sh resume  --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
+#   fleet.sh retry      --dispatch <d> [--force]                 new attempt of the same task; old attempt abandoned
+#                       retry and resume refuse once the task has run $FLEET_MAX_ATTEMPTS attempts (default 5) unless --force
+#   fleet.sh resume     --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
 #                       worktree, for every kind Herdr can resume; --dry-run prints the plan and writes nothing
-#   dispatch.sh release --dispatch <d>                           end a kept (retain or reuse) attempt: remove its worktree, which
+#   fleet.sh release    --dispatch <d>                           end a kept (retain or reuse) attempt: remove its worktree, which
 #                       kills a live agent, and record the release. A worktree that is already gone is only recorded
-#   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
-#   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
-#   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
-#   dispatch.sh report  --from <agent> --type <t> --subject <s> [--key <k>] [--body <text> | --body-file <f>] [--outcome <o>]
+#   fleet.sh stop       --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
+#   fleet.sh abandon    --dispatch <d>                           mark abandoned; worker left running for inspection
+#   fleet.sh show       --dispatch <d> | list                    an attempt's session and transcript are kept after release
+#   fleet.sh report     --from <agent> --type <t> --subject <s> [--key <k>] [--body <text> | --body-file <f>] [--outcome <o>]
 #                       worker side: mail the supervisor, and wake it for the run's wake types. A repeat is not sent
 #                       again and returns the first id: the same --key still un-acked or sent in the agent's current
 #                       attempt, or with no key the same content still un-acked. A repeat of an un-acked message
 #                       wakes the supervisor again for that message
-#   dispatch.sh notify  --line <text> [--to <agent|pane>] [--title <toast title>]
+#   fleet.sh notify     --line <text> [--to <agent|pane>] [--title <toast title>]
 #                       type one line into the supervisor (or --to) from any process; exit 3 = no such agent
-#   dispatch.sh adopt                                            link the live workers of every run to their
+#   fleet.sh adopt                                               link the live workers of every run to their
 #                       supervisor in Herdr, label them and record their sessions; for runs started before Herdr kept the links
 #
-# Run selection: --run <id> anywhere, else $DISPATCH_RUN, else the run last bound from this pane.
-# Ledger: <state>/agent-dispatch/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
+# Run selection: --run <id> anywhere, else $FLEET_RUN (or $DISPATCH_RUN), else the run last bound from this pane.
+# Ledger: <state>/agent-fleet/runs/<run>/ledger.json. Mailbox: <run>/inbox.jsonl (worker -> supervisor),
 # <run>/workers/<agent>/inbox.jsonl (supervisor -> worker).
 # Herdr holds the rest: who supervises which pane, the wake lines that wait for a safe moment, and
 # the reports of a blocked, stalled or gone worker.
 set -euo pipefail
 
-HERE=$(cd "$(dirname "$0")" && pwd)
+# A directory by its fleet name, when the caller came in through an old dispatch name that leads
+# to the same place. The commands this script prints then name fleet.
+fleet_dir() {  # <dir>
+  local c; c=$(printf '%s' "$1" | sed -E 's#(.*)/dispatch/#\1/fleet/#')
+  if [ "$c" != "$1" ] && [ "$c" -ef "$1" ]; then printf '%s' "$c"; else printf '%s' "$1"; fi
+}
+HERE=$(fleet_dir "$(cd "$(dirname "$0")" && pwd)")
+SELF="$HERE/fleet.sh"
 MAIL="$HERE/mail.sh"
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dispatch"
+# State lives in agent-fleet, or in agent-dispatch while that is the only one.
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"
+[ -e "$STATE" ] || [ ! -e "${STATE%/*}/agent-dispatch" ] || STATE="${STATE%/*}/agent-dispatch"
 RUNS="$STATE/runs"
 # What Herdr reports to a supervisor about a worker that has not finished.
 REPORTS=blocked,exited,stalled
 POINTER="$STATE/current-run${HERDR_PANE_ID:+.${HERDR_PANE_ID//:/_}}"
 
-die() { echo "dispatch.sh: $*" >&2; exit 1; }
+die() { echo "fleet.sh: $*" >&2; exit 1; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 new_id() { echo "d_$(date +%Y%m%d%H%M%S)_$RANDOM"; }
 for bin in jq herdr flock; do command -v "$bin" >/dev/null || die "$bin not on PATH"; done
@@ -65,7 +74,7 @@ CMD=${1:-}; shift || true
 [ -n "$CMD" ] || { sed -n '2,/^set -euo pipefail/{/^set -euo pipefail/!p}' "$0" >&2; exit 2; }
 
 # --run may appear anywhere; strip it before per-command parsing.
-RUN=${DISPATCH_RUN:-}
+RUN=${FLEET_RUN:-${DISPATCH_RUN:-}}
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in --run) RUN=$2; shift 2 ;; *) ARGS+=("$1"); shift ;; esac
@@ -74,7 +83,7 @@ set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 bind_run() {
   [ -n "$RUN" ] || RUN=$(cat "$POINTER" 2>/dev/null || true)
-  [ -n "$RUN" ] || die "no run bound: run 'dispatch.sh run' first, or pass --run <id>"
+  [ -n "$RUN" ] || die "no run bound: run '$SELF run' first, or pass --run <id>"
   RUN_DIR="$RUNS/$RUN"; LEDGER="$RUN_DIR/ledger.json"; INBOX="$RUN_DIR/inbox.jsonl"
   [ -f "$LEDGER" ] || die "run '$RUN' has no ledger at $LEDGER"
 }
@@ -88,7 +97,7 @@ ledger_mod() {
 entry() { jq -c --arg d "$1" '.[] | select(.dispatch == $d)' "$LEDGER"; }
 
 # The attempts of a task, oldest first: every entry whose supersedes chain leads to the same first attempt.
-MAX_ATTEMPTS=${DISPATCH_MAX_ATTEMPTS:-5}
+MAX_ATTEMPTS=${FLEET_MAX_ATTEMPTS:-${DISPATCH_MAX_ATTEMPTS:-5}}
 task_attempts() {  # <dispatch>
   jq -r --arg d "$1" '(map({key: .dispatch, value: .supersedes}) | from_entries) as $up
     | def first_attempt: if ($up[.] // null) == null then . else $up[.] | first_attempt end;
@@ -127,15 +136,15 @@ ticket_of() { printf '%s' "$1" | sed -nE 's/^([A-Za-z]{2,6})-([0-9]{1,5})(-.*)?$
 # Set or clear Herdr's well-known label token of a pane, shown at the right edge of its row.
 label_pane() {  # <pane> <text>
   [ -n "$1" ] || return 0
-  if [ -n "$2" ]; then herdr pane report-metadata "$1" --source dispatch --token "label=$2" >/dev/null 2>&1 || true
-  else herdr pane report-metadata "$1" --source dispatch --clear-token label >/dev/null 2>&1 || true; fi
+  if [ -n "$2" ]; then herdr pane report-metadata "$1" --source fleet --token "label=$2" >/dev/null 2>&1 || true
+  else herdr pane report-metadata "$1" --source fleet --clear-token label >/dev/null 2>&1 || true; fi
 }
 
 # Set Herdr's well-known link token of a pane: the web address a sidebar opens for its row.
 # No address sets nothing.
 link_pane() {  # <pane> <url>
   [ -n "$1" ] && [ -n "$2" ] || return 0
-  herdr pane report-metadata "$1" --source dispatch --token "link=$2" >/dev/null 2>&1 || true
+  herdr pane report-metadata "$1" --source fleet --token "link=$2" >/dev/null 2>&1 || true
 }
 
 # Refuse a link that is not an http or https address.
@@ -161,7 +170,7 @@ deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
   local out
   DELIVER_ERROR="no pane"
   [ -n "$1" ] || return 1
-  out=$(herdr agent deliver "$1" "$2" --source dispatch 2>&1) || {
+  out=$(herdr agent deliver "$1" "$2" --source fleet 2>&1) || {
     DELIVER_ERROR=$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)
     [ -n "$DELIVER_ERROR" ] || DELIVER_ERROR="herdr did not answer"
     return 1
@@ -177,19 +186,19 @@ gone_supervisor() {
   [ -z "$sup" ] || herdr pane get "$sup" >/dev/null 2>&1 || printf '%s' "$sup"
 }
 notify_supervisor() {  # <prompt line> <toast title> <toast body>
-  deliver "$(supervisor)" "$@" || echo "dispatch.sh: note: the supervisor was not woken ($DELIVER_ERROR); the message is in the run inbox" >&2
+  deliver "$(supervisor)" "$@" || echo "fleet.sh: note: the supervisor was not woken ($DELIVER_ERROR); the message is in the run inbox" >&2
 }
 
 # Tell a worker it has mail. The message is in its inbox either way.
 nudge() {  # <agent> <prompt line>
-  deliver "$1" "$2" "dispatch: mail for $1" "$2" && return 0
-  echo "dispatch.sh: note: $1 was not nudged ($DELIVER_ERROR); the message is in its inbox" >&2
+  deliver "$1" "$2" "fleet: mail for $1" "$2" && return 0
+  echo "fleet.sh: note: $1 was not nudged ($DELIVER_ERROR); the message is in its inbox" >&2
 }
 
 launch_dispatch() {
   local D=$1 spec res
   spec=$(entry "$D" | jq -c .launch)
-  [ -n "$spec" ] && [ "$spec" != null ] || { echo "dispatch.sh: no launch spec for $D" >&2; return 1; }
+  [ -n "$spec" ] && [ "$spec" != null ] || { echo "fleet.sh: no launch spec for $D" >&2; return 1; }
   res=$(entry "$D" | jq -c '.resume // empty')
   local args=() aargs=() x
   if [ -n "$res" ]; then
@@ -212,7 +221,7 @@ launch_dispatch() {
   receipt=$("$HERE/herdr-fleet.sh" "${args[@]}") || rc=$?
   if [ -z "$receipt" ]; then
     ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .status = "failed_start" | .started = $ts else . end)'
-    echo "dispatch.sh: launcher failed for $D (see stderr above)" >&2; return 1
+    echo "fleet.sh: launcher failed for $D (see stderr above)" >&2; return 1
   fi
   local st ls; st=$(jq -r .status <<<"$receipt")
   case "$st" in working|idle|done|blocked|unknown) ls=working ;; *) ls=failed_start ;; esac
@@ -254,7 +263,7 @@ close_idle_parent() {  # <repo path>
   # The mark is Herdr's. The token marks a parent that a server without the mark opened.
   parent=$(jq -r --arg root "$root" 'first(.result.workspaces[]? | select(.worktree.checkout_path == $root
       and .worktree.is_linked_worktree == false and .pane_count == 1
-      and (.opened_for_worktrees == true or .tokens.dispatch_parent == "1")) | .workspace_id) // empty' <<<"$list")
+      and (.opened_for_worktrees == true or .tokens.fleet_parent == "1" or .tokens.dispatch_parent == "1")) | .workspace_id) // empty' <<<"$list")
   [ -n "$parent" ] || return 0
   [ "$(herdr agent list 2>/dev/null | jq --arg w "$parent" '[.result.agents[]? | select(.workspace_id == $w)] | length')" = 0 ] || return 0
   # A plain close: Herdr refuses it if the group still has a worktree workspace.
@@ -316,9 +325,9 @@ release_worker() {
   # A worker that an older version placed as a tab shares its supervisor's workspace, so the
   # workspace must not be removed for it.
   if [ "$(jq -r '.placement // "workspace"' <<<"$E")" = tab ]; then
-    echo "dispatch.sh: warning: $agent was placed as a tab by an older version; nothing removed" >&2
-    echo "dispatch.sh: remove it by hand. Find its tab with: herdr agent get $agent" >&2
-    echo "dispatch.sh: then: herdr tab close <tab>; git worktree remove $(printf '%q' "$(jq -r '.worktree // "<worktree>"' <<<"$E")")" >&2
+    echo "fleet.sh: warning: $agent was placed as a tab by an older version; nothing removed" >&2
+    echo "fleet.sh: remove it by hand. Find its tab with: herdr agent get $agent" >&2
+    echo "fleet.sh: then: herdr tab close <tab>; git worktree remove $(printf '%q' "$(jq -r '.worktree // "<worktree>"' <<<"$E")")" >&2
     return 0
   fi
   ws=$(herdr agent get "$agent" 2>/dev/null | jq -r '.result.agent.workspace_id // empty' || true)
@@ -326,10 +335,10 @@ release_worker() {
   if [ -n "$wt" ] && [ ! -d "$wt" ]; then
     out=
   elif [ -z "$ws" ]; then
-    echo "dispatch.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0
+    echo "fleet.sh: warning: no workspace known for $agent; nothing removed" >&2; return 0
   elif ! out=$(herdr worktree remove --workspace "$ws" 2>&1); then
-    echo "dispatch.sh: warning: release of $agent failed: $out" >&2
-    echo "dispatch.sh: inspect the worktree, then: herdr worktree remove --workspace $ws --force" >&2
+    echo "fleet.sh: warning: release of $agent failed: $out" >&2
+    echo "fleet.sh: inspect the worktree, then: herdr worktree remove --workspace $ws --force" >&2
     # ps shows the failure until the worktree is gone.
     ledger_mod --arg d "$D" --arg err "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)" \
       'map(if .dispatch == $d then .release_error = (if $err == "" then "release failed" else $err end) else . end)'
@@ -363,7 +372,7 @@ link_workers() {
 }
 
 # The fleet rows of the bound run, one JSON object per attempt. <run arg> follows the command word of
-# every dispatch.sh command in NEXT, such as " --run <run>" for a run that is not the caller's.
+# every fleet.sh command in NEXT, such as " --run <run>" for a run that is not the caller's.
 ps_rows() {  # <run arg>
   local UNACKED AS A ST LEFT DONES GONE
   UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
@@ -390,7 +399,7 @@ ps_rows() {  # <run arg>
         echo "$DD"
       done | jq -R . | jq -sc .)
   DONES=$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -sc 'map({id, from, ts})')
-  jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson gone "$GONE" --argjson dones "$DONES" --arg ra "$1" "$REPLACED_JQ"'
+  jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$SELF" --argjson left "$LEFT" --argjson gone "$GONE" --argjson dones "$DONES" --arg ra "$1" "$REPLACED_JQ"'
     . as $l
     | (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
     | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
@@ -545,7 +554,7 @@ ps_tree() {  # <all 0|1>
   done
   RUN=$root; RUN_DIR="$RUNS/$root"; LEDGER="$RUN_DIR/ledger.json"; INBOX="$RUN_DIR/inbox.jsonl"
   jq -sc 'map({key: .run, value: .}) | from_entries' <<<"$nodes" \
-  | jq -c --arg root "$root" --argjson p "$parents" --argjson all "$1" --arg mail "$0" '. as $R
+  | jq -c --arg root "$root" --argjson p "$parents" --argjson all "$1" --arg mail "$SELF" '. as $R
     | def done: .attention == "none" and (.status == "settled" or .status == "stopped" or .status == "abandoned")
         and ((.decision == "retain" or .decision == "reuse") and .released == null and .replaced_by == null | not);
       def node($r; $seen):
@@ -564,7 +573,7 @@ case "$CMD" in
     NAME= WAKE= LABEL= LABEL_SET= LINK= TAKE=0
     while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; --link) LINK=$2; shift 2 ;; --take-over) TAKE=1; shift ;; *) die "run: unknown option $1" ;; esac; done
     check_link "$LINK"
-    herdr agent deliveries >/dev/null 2>&1 || die "this Herdr server has no delivery queue: dispatch needs the Herdr build with orchestration support"
+    herdr agent deliveries >/dev/null 2>&1 || die "this Herdr server has no delivery queue: fleet needs the Herdr build with orchestration support"
     case ",$WAKE," in *[!a-z_,]*) die "run: --wake takes a comma-separated list of mail types" ;; esac
     RUN=${NAME:-run-$(date +%Y%m%d-%H%M%S)}
     RUN=$(printf '%s' "$RUN" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g')
@@ -588,7 +597,7 @@ case "$CMD" in
       link_pane "$HERDR_PANE_ID" "$LINK"
     fi
     LINKED=0; [ -z "$MOVED" ] || LINKED=$(link_workers)
-    [ -z "$MOVED" ] || [ -z "$OLD" ] || echo "dispatch.sh: run '$RUN' moved from pane $OLD to this pane, with $LINKED live workers. Run ps: mail sent meanwhile woke no one" >&2
+    [ -z "$MOVED" ] || [ -z "$OLD" ] || echo "fleet.sh: run '$RUN' moved from pane $OLD to this pane, with $LINKED live workers. Run ps: mail sent meanwhile woke no one" >&2
     # A run bound from a dispatched worker's pane is a child of that worker's attempt, for ps --tree.
     PARENT=
     if [ -n "${HERDR_PANE_ID:-}" ] && { [ -n "$MOVED" ] || [ ! -f "$RUN_DIR/parent" ]; }; then PARENT=$(record_parent); fi
@@ -619,7 +628,7 @@ case "$CMD" in
     if [ -z "$LABEL_SET" ] && [ -n "$(ticket_of "$NAME")" ]; then
       LABEL=$(ticket_of "$NAME"); REST=$(printf '%s' "$NAME" | sed -E 's/^[A-Za-z]{2,6}-[0-9]{1,5}-?//')
       case "$REST" in
-        [A-Za-z]*) echo "dispatch.sh: note: $LABEL of $NAME is the label and the rest is the agent name; use the agent name in the receipt for later commands, or pass --label \"\" to keep a name whole" >&2; NAME=$REST ;;
+        [A-Za-z]*) echo "fleet.sh: note: $LABEL of $NAME is the label and the rest is the agent name; use the agent name in the receipt for later commands, or pass --label \"\" to keep a name whole" >&2; NAME=$REST ;;
       esac
     fi
     for A in "${AFTER[@]+"${AFTER[@]}"}"; do [ -n "$(entry "$A")" ] || die "--after $A: no such dispatch in run $RUN"; done
@@ -691,7 +700,7 @@ case "$CMD" in
                | .release_when = (if $until == "" then null else $until end) else . end)'
         [ "$DECISION" != release ] || release_worker "$FROM" "$D"
       elif [ -z "$D" ]; then
-        echo "dispatch.sh: warning: no working dispatch for agent $FROM; acked without settlement" >&2
+        echo "fleet.sh: warning: no working dispatch for agent $FROM; acked without settlement" >&2
       fi
     fi
     "$MAIL" ack --inbox "$INBOX" --id "$ID" >/dev/null
@@ -752,7 +761,7 @@ case "$CMD" in
       exit 0
     fi
     GONE=$(gone_supervisor)
-    [ -z "$GONE" ] || echo "dispatch.sh: warning: the supervisor pane $GONE of run '$RUN' is gone, so wakes reach no one. From the pane that supervises it now, run: $0 run --name $RUN" >&2
+    [ -z "$GONE" ] || echo "fleet.sh: warning: the supervisor pane $GONE of run '$RUN' is gone, so wakes reach no one. From the pane that supervises it now, run: $SELF run --name $RUN" >&2
     ROWS=$(ps_rows "")
     if [ "$JSON" = 1 ]; then jq -s . <<<"$ROWS"; else
       { printf 'DISPATCH\tAGENT\tSTATUS\tOUTCOME\tLIVE\tATTENTION\tNEXT\n'
@@ -780,7 +789,7 @@ case "$CMD" in
     D= FORCE=0 DRY=0
     while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; --force) FORCE=1; shift ;; --dry-run) DRY=1; shift ;; *) die "resume: unknown option $1" ;; esac; done
     OLD=$(entry "$D"); [ -n "$OLD" ] || die "no dispatch $D in run $RUN"
-    RETRY="start the task again from its prompt instead: $0 retry --dispatch $D"
+    RETRY="start the task again from its prompt instead: $SELF retry --dispatch $D"
     AGENT=$(jq -r '.agent // empty' <<<"$OLD"); [ -n "$AGENT" ] || die "resume: $D never started an agent; $RETRY"
     SESSION=$(jq -c '.session // empty | select(.value != null and .value != "")' <<<"$OLD")
     [ -n "$SESSION" ] || die "resume: $D has no recorded session; $RETRY"
@@ -790,10 +799,10 @@ case "$CMD" in
     NEXT=$(jq -r --arg d "$D" '[.[] | select(.supersedes == $d and (.status == "pending" or .status == "working")) | .dispatch] | first // empty' "$LEDGER")
     [ -z "$NEXT" ] || die "resume: $D already has a newer attempt $NEXT; resume or stop that one"
     ! herdr agent get "$AGENT" >/dev/null 2>&1 \
-      || die "resume: agent $AGENT is still running; send it a follow-up with $0 send, or resume once it has exited"
+      || die "resume: agent $AGENT is still running; send it a follow-up with $SELF send, or resume once it has exited"
     check_attempts "$D" "$FORCE"
     rc=0; ERR=$("$HERE/herdr-fleet.sh" --check-session "$SESSION" 2>&1) || rc=$?
-    ERR=${ERR#herdr-dispatch: }
+    ERR=${ERR#herdr-fleet: }
     case "$rc" in 0) ;; 1) die "resume: $ERR; $RETRY" ;; *) die "resume: $ERR" ;; esac
     N=$(new_id)
     NOTICE="$RUN_DIR/workers/$AGENT/resume-$N.md"
@@ -855,7 +864,7 @@ EOF
     # Stop removes the worker with its worktree workspace. A worker that an older version placed
     # as a tab has none of its own, so it cannot be stopped from here.
     if [ "$CMD" = stop ] && [ "$(jq -r '.placement // "workspace"' <<<"$E")" = tab ]; then
-      die "stop: $AGENT was placed as a tab by an older version. Close its tab by hand, then run: dispatch.sh abandon --dispatch $D"
+      die "stop: $AGENT was placed as a tab by an older version. Close its tab by hand, then run: $SELF abandon --dispatch $D"
     fi
     NEWST=stopped; [ "$CMD" = stop ] || NEWST=abandoned
     record_session "$D"
@@ -881,7 +890,7 @@ EOF
     [ -n "$LINE" ] || die "notify needs --line"
     [ -n "$TO" ] || { bind_run; TO=$(supervisor); }
     LINE=$(printf '%s' "$LINE" | tr '[:cntrl:]' ' ' | cut -c1-400)
-    deliver "$TO" "$LINE" "${TITLE:-dispatch: wake held}" "$LINE" || exit 3
+    deliver "$TO" "$LINE" "${TITLE:-fleet: wake held}" "$LINE" || exit 3
     ;;
 
   adopt)
@@ -925,8 +934,8 @@ EOF
     [ "$TYPE" != worker_done ] || supervise "$FROM"
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
       SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
-      notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $HERE/dispatch.sh read --run $RUN --id $ID" \
-        "dispatch: $TYPE from $FROM" "$SHORT" ;;
+      notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $SELF read --run $RUN --id $ID" \
+        "fleet: $TYPE from $FROM" "$SHORT" ;;
     esac
     ;;
   *) die "unknown command $CMD" ;;

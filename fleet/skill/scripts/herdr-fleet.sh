@@ -5,20 +5,20 @@ set -euo pipefail
 
 usage() {
   cat >&2 <<'EOF'
-Usage: herdr-dispatch.sh --repo <path> --branch <name> --name <agent-name> --prompt-file <file>
-                         [--base <ref>] [--kind <herdr agent kind>]
-                         [--run-dir <dir> | --inbox <file>]
-                         [-- <native agent args>...]
-       herdr-dispatch.sh --resume <worktree> --session <json> [--pane <id>] --name <agent-name> --prompt-file <file>
-                         --run-dir <dir> [-- <native agent args>...]
-       herdr-dispatch.sh --check-session <json>
+Usage: herdr-fleet.sh --repo <path> --branch <name> --name <agent-name> --prompt-file <file>
+                      [--base <ref>] [--kind <herdr agent kind>]
+                      [--run-dir <dir> | --inbox <file>]
+                      [-- <native agent args>...]
+       herdr-fleet.sh --resume <worktree> --session <json> [--pane <id>] --name <agent-name> --prompt-file <file>
+                      --run-dir <dir> [-- <native agent args>...]
+       herdr-fleet.sh --check-session <json>
   --resume   start the agent again on its recorded session (agent_session of herdr agent get) in the
              existing worktree under the same name, in --pane when that pane is still open on the
              worktree with no agent. The prompt file says it was interrupted.
   --check-session  exit 0 when Herdr can resume the session, 1 when it refuses it, 4 when this Herdr
              cannot resume or give a launch prompt. Opens nothing.
   --run-dir  supervised mode: run inbox at <dir>/inbox.jsonl and a per-worker inbox for replies.
-             Used by dispatch.sh.
+             Used by fleet.sh.
   --inbox    legacy single-mailbox mode (no worker inbox, no supervisor wake).
 EOF
   exit 2
@@ -45,19 +45,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-die() { echo "herdr-dispatch: $*" >&2; exit 1; }
+die() { echo "herdr-fleet: $*" >&2; exit 1; }
 
 # Asks Herdr to resume <session> into a pane that cannot exist. Herdr checks the session before the
 # pane, so the answer says whether it would resume it, without starting anything.
 # Returns 0 (it would), 1 (it refuses the session) or 4 (this Herdr has no agent resume).
 check_session() {  # <session json>
   local out
-  out=$(herdr agent resume dispatch-check --agent-session "$1" --pane dispatch:check --no-supervisor 2>&1 </dev/null || true)
+  out=$(herdr agent resume fleet-check --agent-session "$1" --pane fleet:check --no-supervisor 2>&1 </dev/null || true)
   case "$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)" in
     agent_pane_not_found|agent_name_taken) return 0 ;;
     agent_resume_unsupported|invalid_agent_session|unsupported_agent_kind)
       CHECK_MSG="Herdr cannot resume this session: $(jq -r .error.message <<<"$out")"; return 1 ;;
-    *) CHECK_MSG="this Herdr has no agent resume or launch prompt. Dispatch needs a Herdr build with herdr agent resume"
+    *) CHECK_MSG="this Herdr has no agent resume or launch prompt. Fleet needs a Herdr build with herdr agent resume"
        CHECK_MSG+=" and agent start --prompt-file (FORK.md, Agent launch). herdr said: $(head -c 200 <<<"${out%%$'\n'*}")"; return 4 ;;
   esac
 }
@@ -65,7 +65,7 @@ CHECK_MSG=
 if [ -n "$CHECK" ]; then
   command -v herdr >/dev/null || die "herdr not on PATH"
   rc=0; check_session "$SESSION" || rc=$?
-  [ -z "$CHECK_MSG" ] || echo "herdr-dispatch: $CHECK_MSG" >&2
+  [ -z "$CHECK_MSG" ] || echo "herdr-fleet: $CHECK_MSG" >&2
   exit "$rc"
 fi
 { [ -n "$REPO" ] && [ -n "$BRANCH" ] || { [ -n "$RESUME_WT" ] && [ -n "$SESSION" ]; }; } && [ -n "$NAME" ] && [ -r "$PROMPT_FILE" ] || usage
@@ -74,7 +74,7 @@ fi
 for bin in herdr jq git; do command -v "$bin" >/dev/null || die "$bin not on PATH"; done
 HERDR_STATUS=$(herdr status 2>/dev/null) || die "herdr server not reachable (herdr status)"
 case "$HERDR_STATUS" in *"compatible: no"*)
-  echo "herdr-dispatch: warning: herdr client/server protocol mismatch, see herdr status" >&2 ;;
+  echo "herdr-fleet: warning: herdr client/server protocol mismatch, see herdr status" >&2 ;;
 esac
 # A start also needs the shell wait and the launch prompt, which come with agent resume.
 if [ -n "$RESUME_WT" ]; then
@@ -167,13 +167,16 @@ fi
 if [ -z "$PARENT_BEFORE" ]; then
   PARENT=$(parent_ws)
   if [ -n "$PARENT" ] && [ "$(herdr workspace get "$PARENT" 2>/dev/null | jq -r '.result.workspace.opened_for_worktrees // false')" != true ]; then
-    herdr workspace report-metadata "$PARENT" --source dispatch --token dispatch_parent=1 >/dev/null 2>&1 || true
+    herdr workspace report-metadata "$PARENT" --source fleet --token fleet_parent=1 >/dev/null 2>&1 || true
   fi
 fi
 
 PROMPT=$(cat "$PROMPT_FILE")
-MAIL="$(cd "$(dirname "$0")" && pwd)/mail.sh"
-DISPATCH="$(dirname "$MAIL")/fleet.sh"
+# The scripts directory by its fleet name, as fleet.sh finds it, for the commands the worker gets.
+HERE=$(cd "$(dirname "$0")" && pwd); C=$(printf '%s' "$HERE" | sed -E 's#(.*)/dispatch/#\1/fleet/#')
+[ "$C" = "$HERE" ] || [ ! "$C" -ef "$HERE" ] || HERE=$C
+MAIL="$HERE/mail.sh"
+FLEET="$HERE/fleet.sh"
 WORKER_INBOX=
 if [ -n "$RUN_DIR" ]; then
   INBOX="$RUN_DIR/inbox.jsonl"
@@ -184,9 +187,9 @@ if [ -n "$RUN_DIR" ]; then
 
 ## Reporting to your supervisor
 
-You are dispatched agent \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
+You are fleet worker \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
 
-    $DISPATCH report --run $(basename "$RUN_DIR") --from $NAME --type <type> --key <key> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
+    $FLEET report --run $(basename "$RUN_DIR") --from $NAME --type <type> --key <key> --subject "<one line>" [--body-file <file>] [--outcome succeeded|failed]
 
 Types:
 - \`status\` - progress or a result; you keep working.
@@ -213,7 +216,7 @@ elif [ -n "$INBOX" ]; then
 
 ## Reporting to your supervisor
 
-You are dispatched agent \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
+You are fleet worker \`$NAME\`. Your supervisor reads a mailbox, not your terminal. Send mail with:
 
     $MAIL send --inbox $INBOX --from $NAME --type <type> --subject "<one line>" [--body-file <file>]
 
@@ -223,7 +226,9 @@ EOF
 fi
 
 # The task stays in a file: the first prompt only points at it, and a resume notice refers to it.
-STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-dispatch/prompts"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"
+[ -e "$STATE" ] || [ ! -e "${STATE%/*}/agent-dispatch" ] || STATE="${STATE%/*}/agent-dispatch"
+STATE+=/prompts
 mkdir -p "$STATE"
 TASK_FILE="$STATE/$NAME-$(date +%Y%m%dT%H%M%S).md"
 printf '%s\n' "$PROMPT" >"$TASK_FILE"
@@ -256,8 +261,8 @@ launch_prompt_queued() {
 if [ -n "$CODE" ] && [ "$CODE" != "agent_not_ready" ]; then
   if [ -n "$(pane_agent)" ] && bind_name; then
     CODE=
-    launch_prompt_queued || herdr agent deliver "$NAME" "$LINE" --source dispatch >/dev/null 2>&1 \
-      || echo "herdr-dispatch: warning: $NAME is running but its first prompt was not delivered" >&2
+    launch_prompt_queued || herdr agent deliver "$NAME" "$LINE" --source fleet >/dev/null 2>&1 \
+      || echo "herdr-fleet: warning: $NAME is running but its first prompt was not delivered" >&2
   fi
 fi
 # `agent_not_ready` means herdr started the agent but it has not reached idle, usually a

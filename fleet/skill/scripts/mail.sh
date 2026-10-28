@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# File mailbox between dispatched agents and their supervisor: one JSON object per line.
+# File mailbox between fleet workers and their supervisor: one JSON object per line.
 #   mail.sh send  --inbox F --from NAME --type T --subject S [--body TEXT | --body-file F] [--outcome O] [--reply-to ID]
 #                 [--key K [--since TS]]
 #                 a repeat is not appended and prints {sent: <first id>, duplicate: true, acked: <bool>}: with --key, a message

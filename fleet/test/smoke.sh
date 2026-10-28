@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Smoke test: every dispatch.sh command that needs no live agent, against a throwaway state dir.
+# Smoke test: every fleet.sh command that needs no live agent, against a throwaway state dir.
 # Needs a herdr on PATH whose server has delivery queues. It targets no live agent, so nothing is
 # typed anywhere.
 set -euo pipefail
 D="$(cd "$(dirname "$0")/.." && pwd)/skill/scripts/fleet.sh"
 export XDG_STATE_HOME; XDG_STATE_HOME=$(mktemp -d); trap 'rm -rf "$XDG_STATE_HOME"' EXIT
-unset HERDR_PANE_ID DISPATCH_RUN
+unset HERDR_PANE_ID FLEET_RUN DISPATCH_RUN
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 "$D" run --name smoke --wake status,worker_done | jq -e '.run == "smoke"' >/dev/null || fail run
-ST="$XDG_STATE_HOME/agent-dispatch"
+ST="$XDG_STATE_HOME/agent-fleet"
 [ "$(cat "$ST/runs/smoke/wake-types")" = status,worker_done ] || fail wake-types
 [ ! -e "$ST/panes.json" ] || fail "a pane index was written; Herdr holds the links"
 ID=$("$D" report --run smoke --from w1 --type status --subject "hello | pipe" | jq -r .sent); [ -n "$ID" ] || fail "report status"
@@ -156,7 +156,9 @@ release_with_parent() {  # <name> <jq filter that marks the parent workspace>
 }
 release_with_parent mark '.opened_for_worktrees = true'
 [ "$(cat "$PS/closed" 2>/dev/null)" = wp ] || fail "release left a parent with Herdr's mark open"
-release_with_parent token '.tokens = {dispatch_parent: "1"}'
+release_with_parent token '.tokens = {fleet_parent: "1"}'
+[ "$(cat "$PS/closed" 2>/dev/null)" = wp ] || fail "release left a parent with the fleet_parent token open"
+release_with_parent legacy '.tokens = {dispatch_parent: "1"}'
 [ "$(cat "$PS/closed" 2>/dev/null)" = wp ] || fail "release left a parent with the dispatch_parent token open"
 release_with_parent none '.'
 [ ! -e "$PS/closed" ] || fail "release closed a parent that Herdr did not open for a worktree"
@@ -183,7 +185,7 @@ if [ -n "\$session" ]; then
     *) echo '{"error":{"code":"agent_resume_unsupported","message":"herdr has no resume command for gemini sessions"}}'; exit 1 ;;
   esac
 fi
-[ "\$pane" != dispatch:check ] || { echo '{"error":{"code":"agent_pane_not_found","message":"no pane"}}'; exit 1; }
+[ "\$pane" != fleet:check ] || { echo '{"error":{"code":"agent_pane_not_found","message":"no pane"}}'; exit 1; }
 cat >"$XDG_STATE_HOME/launch-prompt"; echo '{"result":{}}'
 EOF
 chmod +x "$FL"
@@ -384,6 +386,7 @@ grep -q "has run 5 attempts (d_r1 d_r2 d_r3 d_r4 d_r5); the limit is 5. Pass --f
 "$D" retry --run smoke --dispatch d_r5 --force >/dev/null 2>&1 || true
 "$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_r5")] | length == 1' >/dev/null || fail "--force did not start an attempt"
 jq '. + [{dispatch: "d_q1", attempt: 1, status: "failed_start", agent: null, after: [], launch: {}}]' "$L" >"$L.new" && mv "$L.new" "$L"
+FLEET_MAX_ATTEMPTS=1 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 && fail "the limit is not read from FLEET_MAX_ATTEMPTS"
 DISPATCH_MAX_ATTEMPTS=1 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 && fail "the limit is not read from DISPATCH_MAX_ATTEMPTS"
 "$D" retry --run smoke --dispatch d_q1 >/dev/null 2>&1 || true
 "$D" list --run smoke | jq -e '[.[] | select(.supersedes == "d_q1")] | length == 1' >/dev/null || fail "an entry with no supersedes field was not retried"
@@ -410,8 +413,8 @@ plan d_rc | jq -e --arg s "$SID" --arg wt "$WTS/rc" '.agent_args == ["--model", 
 for k in rx:codex rp:pi ro:omp; do
   plan "d_${k%%:*}" | jq -e --arg k "${k#*:}" '.kind == $k and .session.agent == $k and .agent_args == ["--model", "m"]' >/dev/null || fail "${k#*:} resume plan: $(plan "d_${k%%:*}")"
 done
-grep -q -- "--pane dispatch:check" "$XDG_STATE_HOME/launch-calls" || fail "--dry-run did not ask Herdr"
-grep -v -- "--pane dispatch:check" "$XDG_STATE_HOME/launch-calls" | grep -q . && fail "--dry-run started an agent"
+grep -q -- "--pane fleet:check" "$XDG_STATE_HOME/launch-calls" || fail "--dry-run did not ask Herdr"
+grep -v -- "--pane fleet:check" "$XDG_STATE_HOME/launch-calls" | grep -q . && fail "--dry-run started an agent"
 "$D" list --run smoke | jq -e '[.[] | select(.resume != null)] | length == 0' >/dev/null || fail "--dry-run wrote the ledger"
 "$D" ps --run smoke --json | jq -e '.[] | select(.dispatch == "d_ro") | .attention == "exited" and (.next | test("resume --dispatch d_ro"))' >/dev/null || fail "ps does not offer resume"
 
@@ -438,7 +441,7 @@ jq '. + [{dispatch: "d_rs2", attempt: 2, supersedes: "d_rs", status: "working", 
 refuses d_rs "already has a newer attempt d_rs2"
 # A Herdr without agent resume: the refusal names what Herdr needs and does not offer retry.
 echo old >"$XDG_STATE_HOME/herdr-mode"
-refuses d_rx "Dispatch needs a Herdr build with herdr agent resume"
+refuses d_rx "Fleet needs a Herdr build with herdr agent resume"
 dsp resume --run smoke --dispatch d_rx 2>&1 | grep -q "retry --dispatch" && fail "an old Herdr refusal offered retry"
 echo new >"$XDG_STATE_HOME/herdr-mode"
 
@@ -490,7 +493,7 @@ grep -qxF "agent resume lw --agent-session $S --pane lp:1 --timeout 60000 --prom
 grep -q "^You were interrupted and this session is resumed. Read the file $(jq -r .task_file <<<"$OUT") now" "$XDG_STATE_HOME/launch-prompt" || fail "resume prompt: $(cat "$XDG_STATE_HOME/launch-prompt")"
 echo old >"$XDG_STATE_HOME/herdr-mode"; rm -f "$LS/opened"
 OUT=$(launch --repo "$LR" --branch lw3 --name lw --kind claude --prompt-file "$T" --run-dir "$ST/runs/smoke" 2>&1) && fail "start on an old Herdr: $OUT"
-grep -q "Dispatch needs a Herdr build with herdr agent resume" <<<"$OUT" || fail "old Herdr message: $OUT"
+grep -q "Fleet needs a Herdr build with herdr agent resume" <<<"$OUT" || fail "old Herdr message: $OUT"
 [ ! -e "$LS/opened" ] || fail "a worktree opened on an old Herdr"
 echo new >"$XDG_STATE_HOME/herdr-mode"; rm -f "$T"
 

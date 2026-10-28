@@ -26,6 +26,8 @@
 #                       retry and resume refuse once the task has run $DISPATCH_MAX_ATTEMPTS attempts (default 5) unless --force
 #   dispatch.sh resume  --dispatch <d> [--force] [--dry-run]     new attempt that resumes the old one's conversation in its
 #                       worktree, for every kind Herdr can resume; --dry-run prints the plan and writes nothing
+#   dispatch.sh release --dispatch <d>                           end a kept (retain or reuse) attempt: remove its worktree, which
+#                       kills a live agent, and record the release. A worktree that is already gone is only recorded
 #   dispatch.sh stop    --dispatch <d>                           kill the worker (removes its worktree) and mark stopped
 #   dispatch.sh abandon --dispatch <d>                           mark abandoned; worker left running for inspection
 #   dispatch.sh show    --dispatch <d> | list                    an attempt's session and transcript are kept after release
@@ -99,6 +101,18 @@ check_attempts() {  # <dispatch> <force 0|1>
   [ "$2" = 1 ] || [ "$n" -lt "$MAX_ATTEMPTS" ] \
     || die "this task has run $n attempts ($(paste -sd' ' <<<"$ids")); the limit is $MAX_ATTEMPTS. Pass --force to start another"
 }
+
+# The attempt that took over a kept attempt's agent and worktree, or null: the same agent started later,
+# or an attempt down its supersedes chain, that ran. An abandoned or failed attempt takes nothing over.
+# Input: the ledger.
+REPLACED_JQ='def replaced_by($e):
+    (map({key: .dispatch, value: .supersedes}) | from_entries) as $up
+    | def above: ($up[.] // null) | if . == null then empty else ., above end;
+    [.[] | select(.dispatch != $e.dispatch and .started != null
+        and (.status == "working" or .status == "settled" or .status == "stopped")
+        and ((.agent == $e.agent and $e.agent != null and .started > ($e.started // ""))
+             or (.dispatch | [above] | index($e.dispatch)) != null))]
+    | sort_by(.started) | last | .dispatch;'
 
 # Dependencies of a dispatch are met when every `after` is settled with outcome succeeded.
 deps_met() {
@@ -351,7 +365,7 @@ link_workers() {
 # The fleet rows of the bound run, one JSON object per attempt. <run arg> follows the command word of
 # every dispatch.sh command in NEXT, such as " --run <run>" for a run that is not the caller's.
 ps_rows() {  # <run arg>
-  local UNACKED AS A ST LEFT DONES
+  local UNACKED AS A ST LEFT DONES GONE
   UNACKED=$("$MAIL" read --inbox "$INBOX" --unacked | jq -sc .)
   AS='{}'
   for A in $(jq -r '.[] | select(.status == "working") | .agent // empty' "$LEDGER" | sort -u); do
@@ -359,16 +373,32 @@ ps_rows() {  # <run arg>
     AS=$(jq -c --arg a "$A" --arg s "$ST" '.[$a] = $s' <<<"$AS")
   done
   # Attempts that were to be released and still have a worktree: a release that failed or never ran.
+  # A kept attempt counts once a release of it failed.
   LEFT=$(jq -r '.[] | select(.released == null and .worktree != null
-      and ((.status == "settled" and .decision == "release") or .status == "stopped")) | [.dispatch, .worktree] | @tsv' "$LEDGER" \
+      and ((.status == "settled" and .decision == "release") or .status == "stopped"
+           or (.status == "settled" and (.decision == "retain" or .decision == "reuse") and .release_error != null)))
+      | [.dispatch, .worktree] | @tsv' "$LEDGER" \
     | while IFS=$'\t' read -r DD WT; do [ ! -d "$WT" ] || echo "$DD"; done | jq -R . | jq -sc .)
+  # Kept attempts that hold nothing: no later attempt took them over, their worktree is gone, and
+  # their agent does not run on their pane.
+  GONE=$(jq -r "$REPLACED_JQ"' . as $l | .[] | select(.status == "settled" and (.decision == "retain" or .decision == "reuse")
+      and .released == null and .worktree != null) | select(. as $e | $l | replaced_by($e) == null)
+      | [.dispatch, .worktree, (.agent // ""), (.pane_id // "")] | @tsv' "$LEDGER" \
+    | while IFS=$'\t' read -r DD WT A P; do
+        [ ! -d "$WT" ] || continue
+        [ -n "$A" ] && herdr agent get "$A" 2>/dev/null | jq -e --arg p "$P" '.result.agent.pane_id as $q | $q != null and ($p == "" or $q == $p)' >/dev/null && continue
+        echo "$DD"
+      done | jq -R . | jq -sc .)
   DONES=$("$MAIL" read --inbox "$INBOX" --types worker_done | jq -sc 'map({id, from, ts})')
-  jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson dones "$DONES" --arg ra "$1" '
-    (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
+  jq -c --argjson un "$UNACKED" --argjson as "$AS" --arg mail "$0" --argjson left "$LEFT" --argjson gone "$GONE" --argjson dones "$DONES" --arg ra "$1" "$REPLACED_JQ"'
+    . as $l
+    | (map(select(.status == "settled" and .outcome == "succeeded") | .dispatch)) as $ok
     | (map(select(.status == "settled" and .outcome != "succeeded" or .status == "abandoned" or .status == "stopped" or .status == "failed_start") | .dispatch)) as $bad
     | .[]
     | . as $e
     | ($un | map(select(.from == $e.agent))) as $mine
+    | (if $e.status == "settled" and ($e.decision == "retain" or $e.decision == "reuse") and $e.released == null
+       then $l | replaced_by($e) else null end) as $rep
     | (if $e.status == "pending" then "-"
        elif $e.status != "working" then $e.status
        else ($as[$e.agent] // "missing") as $st
@@ -389,11 +419,13 @@ ps_rows() {  # <run arg>
        elif $live == "stalled" then "stalled"
        elif $live == "exited" and $e.status == "working" then "exited"
        elif $e.status == "failed_start" then "failed_start"
+       elif ($gone | index($e.dispatch)) != null then "worktree gone"
        elif ($mine | any(.type == "status")) then "status"
        else "none" end) as $att
     | (($mine | map(select(.type == $att)) | first | .id) // "") as $mid
     | ($e.settled_by // ($dones | map(select(.from == $e.agent and .ts <= ($e.settled // ""))) | last | .id)) as $done_id
     | (if $e.status == "stopped" then "\($mail) stop\($ra) --dispatch \($e.dispatch)"
+       elif $e.status == "settled" and ($e.decision == "retain" or $e.decision == "reuse") then "\($mail) release\($ra) --dispatch \($e.dispatch)"
        elif $done_id != null then "\($mail) ack\($ra) --id \($done_id) --decision release"
        else "herdr worktree remove --workspace \($e.workspace_id)" end) as $finish
     | (if $att == "unreleased" then
@@ -409,17 +441,19 @@ ps_rows() {  # <run arg>
          then "inspect; \($mail) resume\($ra) --dispatch \($e.dispatch), retry or abandon"
        elif $att == "exited" then "inspect; \($mail) retry\($ra) --dispatch \($e.dispatch) or abandon"
        elif $att == "failed_start" then "\($mail) show\($ra) --dispatch \($e.dispatch); \($mail) retry\($ra) --dispatch \($e.dispatch)"
+       elif $att == "worktree gone" then "\($mail) release\($ra) --dispatch \($e.dispatch)"
        elif $att == "status" then "\($mail) read\($ra) --id \($mid); \($mail) ack\($ra) --id \($mid)"
        elif $att == "dep failed" then "\($mail) retry\($ra) --dispatch \($failed_deps | first)"
        elif $att == "waiting deps" then "-"
        elif $att == "ready" then "launching on next ack"
+       elif $rep != null then "replaced by \($rep)"
        elif ($e.decision == "retain" or $e.decision == "reuse") and $e.released == null then
          "kept (\($e.decision)): \($e.decision_reason // "no reason recorded"); release when \($e.release_when // "not recorded")"
        else "\($mail) wait\($ra)" end) as $next
     | {dispatch: $e.dispatch, agent: ($e.agent // "-"), attempt: $e.attempt, status: $e.status, outcome: ($e.outcome // "-"),
        liveness: $live, attention: $att, next: $next, unacked: ($mine | length), after: ($e.after // []),
        decision: $e.decision, reason: $e.decision_reason, until: $e.release_when, transcript: $e.transcript,
-       released: $e.released, release_error: $e.release_error}' "$LEDGER"
+       released: $e.released, release_error: $e.release_error, replaced_by: $rep}' "$LEDGER"
 }
 
 # Nested runs: a run whose supervisor pane is the pane of an attempt in another run is a child of
@@ -495,8 +529,8 @@ record_parent() {
 }
 
 # ps --tree: the bound run and, under each attempt, the runs that attempt supervises, at every depth.
-# A row that is done (settled, stopped or abandoned, with nothing owed and nothing kept) and has no
-# shown row below it is hidden unless <all> is 1. Prints the tree as JSON.
+# A row that is done (settled, stopped or abandoned, with nothing owed, and nothing kept or kept but
+# replaced) and has no shown row below it is hidden unless <all> is 1. Prints the tree as JSON.
 ps_tree() {  # <all 0|1>
   local ix parents runs r nodes= root=$RUN
   ix=$(runs_index); parents=$(run_parents "$ix")
@@ -513,7 +547,7 @@ ps_tree() {  # <all 0|1>
   jq -sc 'map({key: .run, value: .}) | from_entries' <<<"$nodes" \
   | jq -c --arg root "$root" --argjson p "$parents" --argjson all "$1" --arg mail "$0" '. as $R
     | def done: .attention == "none" and (.status == "settled" or .status == "stopped" or .status == "abandoned")
-        and ((.decision == "retain" or .decision == "reuse") and .released == null | not);
+        and ((.decision == "retain" or .decision == "reuse") and .released == null and .replaced_by == null | not);
       def node($r; $seen):
         ($R[$r].rows | map(. as $row | . + {runs: [$p | to_entries[]
             | select(.value.run == $r and .value.dispatch == $row.dispatch and (.key as $k | $seen | any(.[]; . == $k) | not))
@@ -790,6 +824,27 @@ EOF
       settled: null, agent: null, launch: (.launch + {kind: $kind}), resume: $res}' <<<"$OLD")
     ledger_mod --arg d "$D" --argjson n "$NEW" 'map(if .dispatch == $d and .status != "settled" then .status = "abandoned" else . end) + [$n]'
     launch_dispatch "$N"
+    ;;
+
+  release)
+    bind_run
+    D=; while [ $# -gt 0 ]; do case "$1" in --dispatch) D=$2; shift 2 ;; *) die "release: unknown option $1" ;; esac; done
+    E=$(entry "$D"); [ -n "$E" ] || die "no dispatch $D in run $RUN"
+    jq -e '.status == "settled" and (.decision == "retain" or .decision == "reuse")' <<<"$E" >/dev/null \
+      || die "release: $D is not kept (status $(jq -r .status <<<"$E"), decision $(jq -r '.decision // "none"' <<<"$E")); ack its worker_done again to finish a release decision"
+    if [ "$(jq -r '.released // empty' <<<"$E")" = "" ]; then
+      REP=$(jq -r --argjson e "$E" "$REPLACED_JQ"' replaced_by($e) // empty' "$LEDGER")
+      [ -z "$REP" ] || die "release: $D was replaced by $REP, which holds its agent and worktree now; release that attempt"
+      AGENT=$(jq -r '.agent // empty' <<<"$E"); WT=$(jq -r '.worktree // empty' <<<"$E")
+      # Release finds the workspace by the agent's name, so the name must still be this attempt's.
+      if [ -n "$WT" ] && [ -d "$WT" ]; then
+        P=$(herdr agent get "$AGENT" 2>/dev/null | jq -r '.result.agent.pane_id // empty' || true)
+        [ -z "$P" ] || [ "$P" = "$(jq -r '.pane_id // empty' <<<"$E")" ] \
+          || die "release: agent $AGENT now runs on pane $P, not on the pane of $D; remove $WT by hand"
+      fi
+      release_worker "$AGENT" "$D"
+    fi
+    entry "$D" | jq -c '{dispatch, decision, released} + (if .release_error then {release_error} else {} end)'
     ;;
 
   stop|abandon)

@@ -253,6 +253,53 @@ STOPPED_AT=$("$D" show --run smoke --dispatch d_stop | jq -r .settled)
 echo ok >"$WR"; dsp stop --run smoke --dispatch d_stop >/dev/null || fail "re-run of stop"
 "$D" show --run smoke --dispatch d_stop | jq -e --arg s "$STOPPED_AT" '.released != null and .settled == $s' >/dev/null || fail "re-run of stop did not release"
 
+# A kept attempt that a later attempt took over holds nothing: the same agent started later, or an
+# attempt down its supersedes chain. An abandoned later attempt takes nothing over.
+krow() { dsp ps --run smoke --json | jq -c --arg d "$1" '.[] | select(.dispatch == $d)'; }
+KEPT='{"status": "settled", "outcome": "succeeded", "decision": "retain", "decision_reason": "r", "release_when": "u"}'
+T1='{"started": "2026-01-01T00:00:00Z"}' T2='{"started": "2026-01-02T00:00:00Z"}'
+kept() { jq -c ". + {$1: $2}" <<<"$KEPT"; }
+fakews d_kr1 kr settled "$(jq -c '. + {decision: "reuse"}' <<<"$KEPT" | jq -c ". + $T1")"
+fakews d_kr2 kr settled "$(jq -cn "$T2 + {outcome: \"succeeded\", decision: \"release\", released: \"2026-01-02T01:00:00Z\"}")"
+krow d_kr1 | jq -e '.replaced_by == "d_kr2" and .attention == "none" and .next == "replaced by d_kr2"' >/dev/null || fail "a kept attempt of an agent that started again is still kept: $(krow d_kr1)"
+fakews d_kc1 kc1 settled "$(jq -c ". + $T1" <<<"$KEPT")"
+fakews d_kc2 kc2 abandoned "$(jq -cn "$T2 + {supersedes: \"d_kc1\"}")"
+fakews d_kc3 kc3 working "$(jq -cn "{started: \"2026-01-03T00:00:00Z\", supersedes: \"d_kc2\"}")"
+krow d_kc1 | jq -e '.replaced_by == "d_kc3"' >/dev/null || fail "a kept attempt down a supersedes chain is still kept: $(krow d_kc1)"
+fakews d_ka1 ka settled "$(jq -c ". + $T1" <<<"$KEPT")"
+fakews d_ka2 ka abandoned "$T2"
+krow d_ka1 | jq -e '.replaced_by == null and .attention == "none" and (.next | startswith("kept (retain)"))' >/dev/null || fail "an abandoned later attempt replaced a kept one: $(krow d_ka1)"
+TK=$(dsp ps --run smoke --tree --json)
+jq -e '[.rows[].dispatch] | index("d_kr1") == null and index("d_ka1") != null' <<<"$TK" >/dev/null || fail "ps --tree shows a replaced kept attempt"
+dsp ps --run smoke --tree --all --json | jq -e '[.rows[].dispatch] | index("d_kr1") != null' >/dev/null || fail "ps --tree --all hides a replaced kept attempt"
+
+# A kept attempt whose worktree is gone and whose agent does not run on its pane holds nothing.
+# release records it; on a worktree that is still there it removes it.
+fakews d_kg kg settled "$(kept pane_id '"kg:1"')"; rm -rf "$WTS/fk-kg"
+krow d_kg | jq -e '.attention == "worktree gone" and (.next | test("release --dispatch d_kg$"))' >/dev/null || fail "a kept attempt with no worktree: $(krow d_kg)"
+fakews d_kl kl settled "$(kept pane_id '"kl:1"')"; rm -rf "$WTS/fk-kl"
+jq -cn '{result: {agent: {name: "kl", pane_id: "kl:1"}}}' >"$FA/kl"
+krow d_kl | jq -e '.attention == "none" and (.next | startswith("kept (retain)"))' >/dev/null || fail "a kept agent that runs lost its row: $(krow d_kl)"
+jq -cn '{result: {agent: {name: "kl", pane_id: "kl:2"}}}' >"$FA/kl"
+krow d_kl | jq -e '.attention == "worktree gone"' >/dev/null || fail "an agent of the same name on another pane kept a row: $(krow d_kl)"
+rm -f "$FA/kl"
+fakews d_kw kw settled "$(kept pane_id '"kw:1"')"
+krow d_kw | jq -e '.attention == "none" and (.next | startswith("kept (retain)"))' >/dev/null || fail "a kept worktree with no agent lost its row: $(krow d_kw)"
+dsp release --run smoke --dispatch d_kg | jq -e '.dispatch == "d_kg" and .released != null' >/dev/null || fail "release of a gone worktree"
+krow d_kg | jq -e '.attention == "none" and (.next | test("wait"))' >/dev/null || fail "a released kept attempt: $(krow d_kg)"
+REL=$("$D" show --run smoke --dispatch d_kg | jq -r .released)
+dsp release --run smoke --dispatch d_kg | jq -e --arg r "$REL" '.released == $r' >/dev/null || fail "a re-run of release changed it"
+dsp release --run smoke --dispatch d_kr1 >/dev/null 2>&1 && fail "release of a replaced attempt"
+dsp release --run smoke --dispatch d_kr2 >/dev/null 2>&1 && fail "release of an attempt that is not kept"
+[ -d "$WTS/fk-kr" ] || fail "a refused release removed a worktree"
+jq -cn '{result: {agent: {name: "kw", pane_id: "kw:2", workspace_id: "fk-kw"}}}' >"$FA/kw"
+dsp release --run smoke --dispatch d_kw >/dev/null 2>&1 && fail "release of a worktree whose agent name runs on another pane"
+rm -f "$FA/kw"; [ -d "$WTS/fk-kw" ] || fail "a refused release removed a worktree"
+echo dirty >"$WR"; dsp release --run smoke --dispatch d_kw >/dev/null 2>&1 || fail "release with a dirty worktree"
+krow d_kw | jq -e '.attention == "unreleased" and (.next | test("--force; then .*release --dispatch d_kw$"))' >/dev/null || fail "a failed release of a kept attempt: $(krow d_kw)"
+echo ok >"$WR"; dsp release --run smoke --dispatch d_kw | jq -e '.released != null and .release_error == null' >/dev/null || fail "release of a kept worktree"
+[ ! -d "$WTS/fk-kw" ] || fail "release left the worktree"
+
 # A Herdr shim that keeps each wake line in delivered and each supervise call in supervised, and
 # answers pane get for the panes in alive and agent get for each agents/<name> (its pane id).
 WK="$XDG_STATE_HOME/wake-shim"; mkdir -p "$WK/bin" "$WK/agents"; : >"$WK/alive"

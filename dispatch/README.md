@@ -60,6 +60,8 @@ The `HERDR` lines come from the server, through the supervision link that `dispa
 
 `dispatch.sh ps` shows every attempt with its liveness and the next command to run. That includes an attempt that was to be released and still has its worktree, because the release failed or the command died first. Settling again finishes it.
 
+A kept (retain or reuse) attempt shows `kept` only while it holds something. One that a later attempt of the same agent or task took over shows `replaced by <dispatch>`, and `--tree` hides it. One whose worktree was removed outside dispatch, with no agent left on its pane, shows `worktree gone`. `dispatch.sh release --dispatch <d>` ends a kept attempt: it removes the worktree when one is there and records the release.
+
 ## Nested runs
 
 A worker can bind a run of its own and dispatch workers of its own: a project agent dispatches one agent per issue, and each issue agent dispatches a PR driver and reviewers. `dispatch.sh ps --tree` shows all of it from the top:
@@ -74,7 +76,7 @@ run t-proj                                                           supervised 
           loadtest      d_lt      working  -        live  question   dispatch.sh reply --run t-a-review --id msg_1793154718920178725_4067045 --body ...
 ```
 
-Each run sits under the attempt whose pane supervises it. A row that is done (settled, stopped or abandoned, with no mail owed and nothing kept) and has nothing shown below it is hidden and counted on its run line. `--all` shows every row, and `--json` gives the same tree nested. `ps` without `--tree` shows one run, as before.
+Each run sits under the attempt whose pane supervises it. A row that is done (settled, stopped or abandoned, with no mail owed and nothing kept, or kept and replaced) and has nothing shown below it is hidden and counted on its run line. `--all` shows every row, and `--json` gives the same tree nested. `ps` without `--tree` shows one run, as before.
 
 How a run is linked to its parent attempt:
 

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# The fleet command, for a link on PATH.
+exec "$(dirname "$(readlink -f "$0")")/../skill/scripts/fleet.sh" "$@"

@@ -173,7 +173,7 @@ fi
 
 PROMPT=$(cat "$PROMPT_FILE")
 MAIL="$(cd "$(dirname "$0")" && pwd)/mail.sh"
-DISPATCH="$(dirname "$MAIL")/dispatch.sh"
+DISPATCH="$(dirname "$MAIL")/fleet.sh"
 WORKER_INBOX=
 if [ -n "$RUN_DIR" ]; then
   INBOX="$RUN_DIR/inbox.jsonl"

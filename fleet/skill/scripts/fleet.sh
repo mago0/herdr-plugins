@@ -209,7 +209,7 @@ launch_dispatch() {
   [ ${#aargs[@]} -eq 0 ] || args+=(-- "${aargs[@]}")
 
   local receipt rc=0 t0; t0=$(now)
-  receipt=$("$HERE/herdr-dispatch.sh" "${args[@]}") || rc=$?
+  receipt=$("$HERE/herdr-fleet.sh" "${args[@]}") || rc=$?
   if [ -z "$receipt" ]; then
     ledger_mod --arg d "$D" --arg ts "$(now)" 'map(if .dispatch == $d then .status = "failed_start" | .started = $ts else . end)'
     echo "dispatch.sh: launcher failed for $D (see stderr above)" >&2; return 1
@@ -792,7 +792,7 @@ case "$CMD" in
     ! herdr agent get "$AGENT" >/dev/null 2>&1 \
       || die "resume: agent $AGENT is still running; send it a follow-up with $0 send, or resume once it has exited"
     check_attempts "$D" "$FORCE"
-    rc=0; ERR=$("$HERE/herdr-dispatch.sh" --check-session "$SESSION" 2>&1) || rc=$?
+    rc=0; ERR=$("$HERE/herdr-fleet.sh" --check-session "$SESSION" 2>&1) || rc=$?
     ERR=${ERR#herdr-dispatch: }
     case "$rc" in 0) ;; 1) die "resume: $ERR; $RETRY" ;; *) die "resume: $ERR" ;; esac
     N=$(new_id)

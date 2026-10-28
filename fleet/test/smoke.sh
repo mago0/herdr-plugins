@@ -3,7 +3,7 @@
 # Needs a herdr on PATH whose server has delivery queues. It targets no live agent, so nothing is
 # typed anywhere.
 set -euo pipefail
-D="$(cd "$(dirname "$0")/.." && pwd)/skill/scripts/dispatch.sh"
+D="$(cd "$(dirname "$0")/.." && pwd)/skill/scripts/fleet.sh"
 export XDG_STATE_HOME; XDG_STATE_HOME=$(mktemp -d); trap 'rm -rf "$XDG_STATE_HOME"' EXIT
 unset HERDR_PANE_ID DISPATCH_RUN
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -450,7 +450,7 @@ HERDR_ENV= dsp resume --run smoke --dispatch d_rc >/dev/null 2>&1 || true
        and .resume.session.value == $s and .launch.kind == "claude" and .status == "failed_start"))' >/dev/null || fail "resume ledger: $("$D" list --run smoke | jq -c '.[] | select(.supersedes == "d_rc")')"
 NOTE=$("$D" list --run smoke | jq -r '.[] | select(.supersedes == "d_rc") | .resume.notice')
 grep -q 'git status' "$NOTE" && grep -qF "$WTS/rc" "$NOTE" && grep -q "/prompts/first.md" "$NOTE" || fail "resume notice: $(cat "$NOTE")"
-rc=0; HERDR_ENV= "$(dirname "$D")/herdr-dispatch.sh" --resume "$WTS/rc" --session "{\"agent\":\"claude\",\"kind\":\"id\",\"value\":\"$SID\"}" \
+rc=0; HERDR_ENV= "$(dirname "$D")/herdr-fleet.sh" --resume "$WTS/rc" --session "{\"agent\":\"claude\",\"kind\":\"id\",\"value\":\"$SID\"}" \
   --name rc --prompt-file "$NOTE" --run-dir "$ST/runs/smoke" 2>/dev/null || rc=$?
 [ "$rc" = 1 ] || fail "the launcher did not take --resume in place of --repo and --branch (exit $rc)"
 
@@ -474,7 +474,7 @@ esac
 EOF
 chmod +x "$LS/bin/herdr"
 T=$(mktemp); echo "the task" >"$T"
-launch() { HERDR_ENV=1 PATH="$LS/bin:$PATH" "$(dirname "$D")/herdr-dispatch.sh" "$@"; }
+launch() { HERDR_ENV=1 PATH="$LS/bin:$PATH" "$(dirname "$D")/herdr-fleet.sh" "$@"; }
 : >"$XDG_STATE_HOME/launch-calls"
 OUT=$(launch --repo "$LR" --branch lw2 --name lw --kind claude --prompt-file "$T" --run-dir "$ST/runs/smoke" -- --model m 2>&1) || fail "start: $OUT"
 jq -e '.status == "idle" and .kind == "claude"' <<<"$OUT" >/dev/null || fail "start receipt: $OUT"

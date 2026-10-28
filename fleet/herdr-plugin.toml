@@ -1,6 +1,6 @@
-id = "dispatch"
-name = "Dispatch"
-version = "0.2.0"
+id = "fleet"
+name = "Fleet"
+version = "0.3.0"
 min_herdr_version = "0.9.3"
 description = "Supervise worker agents in git worktrees: runs, typed and acked mail, and a fleet view. Needs a Herdr server with delivery queues and supervision links."
 platforms = ["linux", "macos"]

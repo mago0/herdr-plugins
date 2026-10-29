@@ -47,6 +47,20 @@ done
 
 die() { echo "herdr-fleet: $*" >&2; exit 1; }
 
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/agent-fleet"
+[ -e "$STATE" ] || [ ! -e "${STATE%/*}/agent-dispatch" ] || STATE="${STATE%/*}/agent-dispatch"
+RUNS="$STATE/runs"
+RUN=${RUN_DIR##*/}
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=pause.sh
+source "$(cd "$(dirname "$0")" && pwd)/pause.sh"
+# Fleet passes its locked descriptor to the launcher; direct callers acquire it here.
+if [ "${FLEET_CONTROL_LOCK_PATH:-}" != "$STATE/control.lock" ] || ! { true >&8; } 2>/dev/null; then
+  mkdir -p "$STATE"; exec 8>"$STATE/control.lock"
+fi
+flock -x 8
+fleet_pause_active "${REUSE_PANE:-$NAME}" && die "subtree paused or pausing; explicit unpause required"
+
 # Asks Herdr to resume <session> into a pane that cannot exist. Herdr checks the session before the
 # pane, so the answer says whether it would resume it, without starting anything.
 # Returns 0 (it would), 1 (it refuses the session) or 4 (this Herdr has no agent resume).

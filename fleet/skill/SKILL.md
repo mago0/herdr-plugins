@@ -113,6 +113,12 @@ A run that exits 0 and prints text has news, and Herdr delivers that text to `--
 
 To type one line into an agent from any process: `herdr agent deliver <agent|pane> "<line>"`.
 
+### Pause is not teardown
+
+Use `fleet.sh pause --run <run>` and `pause-status --run <run>`. Pause preserves ownership, hierarchy, agents, worktrees and mail; it does not settle workers. A request sent or an `idle`/`done` badge is not confirmation. Pending or failed coverage stays visible.
+
+Use `unpause --authorization <reconciliation.json>` only after explicit user authorization and identity, ownership, PR and job reconciliation. No automatic resume or blind delivery replay. For separately authorized teardown, use `pause-release` with an empty jobs list, then the existing cleanup rules. See [pause operations and recovery](../docs/pause.md) for the receipt, authorization format and manual fallback. Never clear supervision links or release workers to pause. To suppress reports manually while retaining a link: `herdr pane supervise CHILD --by PARENT --report ''`.
+
 ### Cleanup
 
 - `ack --decision release` is the normal path, and `release --dispatch <d>` for a kept attempt. To sweep a worker by hand: `WS=$(herdr agent get <agent> | jq -r .result.agent.workspace_id); herdr worktree remove --workspace "$WS"` - resolve now, never from an old receipt.

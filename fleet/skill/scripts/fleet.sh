@@ -2,6 +2,10 @@
 # Fleet, the supervisor front-end for Herdr workers: a per-run ledger of dispatch attempts, an ack-based
 # mailbox, off-pane replies, dependency launches, and a fleet view with liveness + next action.
 #
+#   fleet.sh pause      [--run <run>]   # checkpoint and fence a subtree, retaining ownership
+#   fleet.sh pause-status [--run <run>] # confirmed, pending and failed coverage
+#   fleet.sh unpause    --authorization <reconciliation.json> [--run <run>]
+#   fleet.sh pause-release --authorization <reconciliation.json> [--run <run>] # authorize existing cleanup; no automatic work
 #   fleet.sh run        [--name <slug>] [--wake <types>] [--label <text>] [--link <url>] [--take-over]
 #                       bind (create or resume) a run; later commands default to it. This pane becomes the
 #                       supervisor and the run's live workers are linked to it. A run whose supervisor pane is
@@ -170,6 +174,7 @@ deliver() {  # <agent|pane> <prompt line> <toast title> <toast body>
   local out
   DELIVER_ERROR="no pane"
   [ -n "$1" ] || return 1
+  if fleet_pause_active "$1"; then DELIVER_ERROR="subtree_paused"; return 1; fi
   out=$(herdr agent deliver "$1" "$2" --source fleet 2>&1) || {
     DELIVER_ERROR=$(jq -r '.error.code // empty' <<<"$out" 2>/dev/null || true)
     [ -n "$DELIVER_ERROR" ] || DELIVER_ERROR="herdr did not answer"
@@ -198,6 +203,10 @@ nudge() {  # <agent> <prompt line>
 launch_dispatch() {
   local D=$1 spec res
   spec=$(entry "$D" | jq -c .launch)
+  if fleet_pause_active "$(jq -r '.name // empty' <<<"$spec")"; then
+    echo "fleet.sh: $D remains pending: subtree paused" >&2
+    return 0
+  fi
   [ -n "$spec" ] && [ "$spec" != null ] || { echo "fleet.sh: no launch spec for $D" >&2; return 1; }
   res=$(entry "$D" | jq -c '.resume // empty')
   local args=() aargs=() x
@@ -568,7 +577,20 @@ ps_tree() {  # <all 0|1>
       node($root; [$root])'
 }
 
+# shellcheck source-path=SCRIPTDIR
+# shellcheck source=pause.sh
+source "$HERE/pause.sh"
 case "$CMD" in
+  wait|read|ps|show|list) ;;
+  *) mkdir -p "$STATE"; exec 8>"$STATE/control.lock"; flock -x 8; export FLEET_CONTROL_LOCK_PATH="$STATE/control.lock" ;;
+esac
+fleet_pause_admission "$@"
+
+case "$CMD" in
+  pause|pause-status|unpause|pause-release)
+    bind_run
+    fleet_pause_command "$@"
+    ;;
   run)
     NAME= WAKE= LABEL= LABEL_SET= LINK= TAKE=0
     while [ $# -gt 0 ]; do case "$1" in --name) NAME=$2; shift 2 ;; --wake) WAKE=$2; shift 2 ;; --label) LABEL=$2 LABEL_SET=1; shift 2 ;; --link) LINK=$2; shift 2 ;; --take-over) TAKE=1; shift ;; *) die "run: unknown option $1" ;; esac; done
@@ -931,7 +953,7 @@ EOF
       TYPE=$(jq -r .type <<<"$FIRST"); SUBJ=$(jq -r .subject <<<"$FIRST")
     fi
     # A worker that is done stays linked for the tree and sends no more reports.
-    [ "$TYPE" != worker_done ] || supervise "$FROM"
+    if [ "$TYPE" = worker_done ] && ! fleet_pause_active "$FROM"; then supervise "$FROM"; fi
     case ",$(cat "$RUN_DIR/wake-types" 2>/dev/null || echo question,escalation,worker_done)," in *",$TYPE,"*)
       SHORT=$(printf '%s' "$SUBJ" | tr '|' ' ' | tr '[:cntrl:]' ' ' | cut -c1-160 | iconv -c -f UTF-8 -t UTF-8 2>/dev/null || true)
       notify_supervisor "MAIL|$ID|$TYPE|$FROM|$SHORT - handle it: $SELF read --run $RUN --id $ID" \

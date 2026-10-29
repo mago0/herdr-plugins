@@ -144,6 +144,10 @@ herdr agent deliver lead "PR 123 has a new push"                 # one line, fro
 
 The same news is not delivered twice in a row, so the command needs no bookkeeping. A job ends when its target pane or the pane that added it closes.
 
+## Pause
+
+Use `fleet.sh pause --run <run>` and `pause-status`; see [pause and recovery](docs/pause.md). Pause retains hierarchy and ownership. It needs the matching Herdr fork with `subtree.control`; an unsupported server leaves coverage unconfirmed and the local gate closed.
+
 ## Limits
 
 - `stalled` finds a frozen agent. An agent that still animates while it waits on a tool that never returns is not found.

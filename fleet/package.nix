@@ -40,6 +40,7 @@ stdenvNoCC.mkDerivation {
       ./herdr-plugin.toml
       ./README.md
       ./skill
+      ./docs/pause.md
     ];
   };
 
@@ -50,7 +51,7 @@ stdenvNoCC.mkDerivation {
     runHook preInstall
     share=$out/share/herdr-plugins/fleet
     mkdir -p $share $out/bin
-    cp -r herdr-plugin.toml README.md skill $share/
+    cp -r herdr-plugin.toml README.md skill docs $share/
     # The old dispatch names are links for live sessions in a checkout; a fresh install has none.
     find $share/skill/scripts -type l -delete
     for script in $share/skill/scripts/*.sh; do

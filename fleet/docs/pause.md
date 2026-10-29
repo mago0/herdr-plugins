@@ -15,7 +15,7 @@ Herdr fences the subtree, retains supervision links, suppresses reports, suspend
 
 ## Resume
 
-Only after explicit user authorization, reconcile current identities, ownership, PR state and saved job definitions. Record the decision:
+Only after explicit user authorization, reconcile current identities, ownership, pull request (PR) state and saved job definitions. Record the decision:
 
 ```json
 {"pause_id":"ID_FROM_PAUSE_RECEIPT","operation":"resume","authorization":"Matt requested resume of PROJECT","ownership_checked":true,"pr_state_checked":true,"jobs":["pr-watch-repo-123"]}
@@ -43,6 +43,6 @@ Never use `--clear`, release, stop, abandon, worktree removal or pane closure as
 
 ## Boundary
 
-See the implementation's server documentation for exact raw-command coverage. A server fence cannot undo bytes already sent to a terminal or stop an agent's current tool call, arbitrary external schedulers or application processes. Those require cooperative checkpoint confirmation. Native harness completion queues, such as Pi background notifications, are not intercepted by Herdr; a worker that cannot cancel or reconcile them must remain unconfirmed. Host-level process/terminal access is not a security boundary. Unconfirmed work stays visible; never infer complete coverage from UI state.
+See the implementation's server documentation for exact raw-command coverage. A server fence cannot undo bytes already sent to a terminal or stop an agent's current tool call, arbitrary external schedulers or application processes. Those require cooperative checkpoint confirmation. Native harness completion queues, such as Pi background notifications, are not intercepted by Herdr; a worker that cannot cancel or reconcile them must remain unconfirmed. Host-level process/terminal access is not a security boundary. Unconfirmed work stays visible; never infer complete coverage from user interface (UI) state.
 
 Standalone installs need GNU `sync -f` for durable control writes; the Nix package supplies it.
